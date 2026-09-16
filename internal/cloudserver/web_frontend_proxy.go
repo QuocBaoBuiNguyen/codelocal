@@ -54,7 +54,7 @@ func isNextPublicAssetPath(path string) bool {
 	}
 	switch path {
 	case "/favicon.ico",
-		"/icon.svg",
+		"/icon.png",
 		"/apple-icon.png",
 		"/codelocal-icon.png",
 		"/codelocal-icon-192.png",
