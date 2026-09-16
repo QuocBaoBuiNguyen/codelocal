@@ -21,8 +21,8 @@ const copyByLocale: Record<string, Copy> = {
   en: {
     eyebrow: "Public build notice",
     title: "CodeLocal is still being opened up.",
-    body: "codelocal.cloud is the current reference build. The public source is being manually separated and moved piece by piece from the private Enterprise codebase, which serves security-sensitive business deployments.",
-    body2: "We encourage you to fork the repository, study it, adapt it, and build your own deployment. Found something wrong or have a better idea? Help us improve it in the Forums.",
+    body: "codelocal.cloud is the CodeLocal build we currently run for people to try. The source on GitHub is not complete yet.",
+    body2: "We do not copy the Enterprise codebase into the public repository. Each capability is implemented again using the proven Enterprise edition as a reference, so the open-source version is easier to understand, audit, fork and run independently. You are welcome to fork it and help us improve it in the Forums.",
     fork: "Fork on GitHub",
     feedback: "Feedback on Forums",
     close: "Continue",
@@ -30,8 +30,8 @@ const copyByLocale: Record<string, Copy> = {
   vi: {
     eyebrow: "Thông báo về bản public",
     title: "CodeLocal vẫn đang trong quá trình mở mã nguồn.",
-    body: "codelocal.cloud hiện là bản dựng tham chiếu của CodeLocal. Mã nguồn public đang được bóc tách thủ công và chuyển dần từng phần từ codebase Enterprise riêng, vốn phục vụ các doanh nghiệp có yêu cầu bảo mật cao.",
-    body2: "Chúng tôi khuyến khích mọi người fork repository, nghiên cứu, chỉnh sửa và tự dựng phiên bản phù hợp với nhu cầu của mình. Nếu thấy điểm chưa ổn hoặc có ý tưởng tốt hơn, hãy góp ý trên Forums để cùng hoàn thiện dự án.",
+    body: "codelocal.cloud là bản CodeLocal đang chạy để mọi người dùng thử. Mã nguồn trên GitHub hiện chưa đầy đủ.",
+    body2: "Chúng tôi không copy nguyên code Enterprise sang bản public. Thay vào đó, từng tính năng được viết lại dựa trên phiên bản Enterprise đã được kiểm chứng, để bản mã nguồn mở dễ hiểu, dễ audit, dễ fork và tự triển khai hơn. Mọi người có thể fork và góp ý trên Forums để cùng hoàn thiện CodeLocal.",
     fork: "Fork trên GitHub",
     feedback: "Góp ý trên Forums",
     close: "Tiếp tục",
@@ -39,8 +39,8 @@ const copyByLocale: Record<string, Copy> = {
   "zh-Hans": {
     eyebrow: "公开版本说明",
     title: "CodeLocal 仍在逐步开放源代码。",
-    body: "codelocal.cloud 是 CodeLocal 团队当前的参考部署。公开源码正在从面向高安全要求企业环境的私有 Enterprise 代码库中，经过人工审查、解耦后逐步迁移出来。",
-    body2: "我们鼓励大家 Fork 仓库、阅读代码、按自己的需求修改并尝试自行部署。如果你发现问题或有更好的设计，请在 Forums 中反馈，一起把项目做得更好。",
+    body: "codelocal.cloud 是目前供大家体验的 CodeLocal 版本。GitHub 上的公开源码目前还不完整。",
+    body2: "我们不会把 Enterprise 代码库直接复制到公开仓库。每项功能都会以已经过验证的 Enterprise 版本为参考重新实现，让开源版本更容易理解、审计、Fork 和独立部署。欢迎 Fork 并在 Forums 中一起完善 CodeLocal。",
     fork: "在 GitHub 上 Fork",
     feedback: "前往 Forums 反馈",
     close: "继续",
@@ -48,8 +48,8 @@ const copyByLocale: Record<string, Copy> = {
   hi: {
     eyebrow: "पब्लिक बिल्ड सूचना",
     title: "CodeLocal का ओपन-सोर्स संस्करण अभी विकसित हो रहा है।",
-    body: "codelocal.cloud फिलहाल CodeLocal टीम का reference deployment है। Public source को high-security enterprise environments के लिए बने private Enterprise codebase से manually review, decouple और धीरे-धीरे migrate किया जा रहा है।",
-    body2: "हम आपको repository fork करने, code पढ़ने, अपनी जरूरत के अनुसार बदलने और अपना deployment बनाने के लिए प्रोत्साहित करते हैं। कोई समस्या या बेहतर idea मिले तो Forums पर feedback दें और project को बेहतर बनाने में मदद करें।",
+    body: "codelocal.cloud वह CodeLocal build है जिसे हम अभी लोगों को इस्तेमाल करके देखने के लिए चला रहे हैं। GitHub पर public source अभी पूरा नहीं है।",
+    body2: "हम Enterprise codebase को सीधे public repository में copy नहीं करते। हर capability को proven Enterprise edition को reference मानकर दोबारा implement किया जाता है, ताकि open-source version समझने, audit करने, fork करने और independently deploy करने में आसान हो। आप इसे fork करके Forums पर feedback दे सकते हैं।",
     fork: "GitHub पर Fork करें",
     feedback: "Forums पर Feedback दें",
     close: "जारी रखें",
