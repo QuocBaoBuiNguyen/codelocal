@@ -23,6 +23,22 @@ export const metadata: Metadata = {
   },
   description:
     "Connect AI coding clients to an authorized local runtime and durable Project Brain without moving raw source execution into the cloud.",
+  openGraph: {
+    type: "website",
+    url: "/",
+    siteName: "CodeLocal",
+    title: "CodeLocal",
+    description:
+      "Connect AI coding clients to an authorized local runtime and durable Project Brain without moving raw source execution into the cloud.",
+    images: [{ url: "/opengraph-image", width: 1200, height: 630, alt: "CodeLocal — AI coding with local execution and durable project intelligence" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "CodeLocal",
+    description:
+      "Connect AI coding clients to an authorized local runtime and durable Project Brain without moving raw source execution into the cloud.",
+    images: ["/twitter-image"],
+  },
   manifest: "/manifest.webmanifest",
   applicationName: "CodeLocal",
   appleWebApp: { capable: true, title: "CodeLocal", statusBarStyle: "black-translucent" },

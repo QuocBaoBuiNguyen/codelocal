@@ -36,6 +36,7 @@ export async function generateMetadata({ params }: TopicPageProps): Promise<Meta
   if (!resource) return { title: t("Forum topic not found"), robots: { index: false, follow: false } };
   const { topic } = resource;
   const description = forumExcerpt(topic.body, 180);
+  const socialImage = topic.assetIds[0] ? publicForumImageURL(topic.assetIds[0]) : "/opengraph-image";
   return {
     title: topic.title,
     description,
@@ -48,7 +49,13 @@ export async function generateMetadata({ params }: TopicPageProps): Promise<Meta
       publishedTime: new Date(topic.createdAt).toISOString(),
       modifiedTime: new Date(topic.updatedAt).toISOString(),
       tags: topic.tags,
-      images: topic.assetIds[0] ? [{ url: publicForumImageURL(topic.assetIds[0]) }] : undefined,
+      images: topic.assetIds[0] ? [{ url: socialImage }] : [{ url: socialImage, width: 1200, height: 630 }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: topic.title,
+      description,
+      images: [topic.assetIds[0] ? socialImage : "/twitter-image"],
     },
   };
 }

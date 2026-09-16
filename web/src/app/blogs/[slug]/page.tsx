@@ -29,6 +29,7 @@ export async function generateMetadata({ params }: ArticleProps): Promise<Metada
   const slug = decodeBlogRouteSlug(routeSlug);
   const post = await getBlogPostForRender(slug);
   if (!post) return { title: t("Article not found"), robots: { index: false, follow: false } };
+  const socialImage = post.coverAssetId ? publicCoverURL(post.coverAssetId) : "/opengraph-image";
 
   return {
     title: post.title,
@@ -42,7 +43,13 @@ export async function generateMetadata({ params }: ArticleProps): Promise<Metada
       publishedTime: `${post.publishedAt}T00:00:00Z`,
       modifiedTime: post.updatedAt ? `${post.updatedAt}T00:00:00Z` : undefined,
       tags: post.tags,
-      images: post.coverAssetId ? [{ url: publicCoverURL(post.coverAssetId) }] : undefined,
+      images: post.coverAssetId ? [{ url: socialImage }] : [{ url: socialImage, width: 1200, height: 630 }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: post.title,
+      description: post.excerpt,
+      images: [post.coverAssetId ? socialImage : "/twitter-image"],
     },
   };
 }

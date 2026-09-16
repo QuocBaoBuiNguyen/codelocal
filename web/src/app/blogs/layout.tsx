@@ -18,6 +18,13 @@ export async function generateMetadata(): Promise<Metadata> {
       title: t("CodeLocal Blog"),
       description: t("Practical notes on local-first AI infrastructure, agents and project intelligence."),
       type: "website",
+      images: [{ url: "/opengraph-image", width: 1200, height: 630 }],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: t("CodeLocal Blog"),
+      description: t("Practical notes on local-first AI infrastructure, agents and project intelligence."),
+      images: ["/twitter-image"],
     },
   };
 }
