@@ -200,11 +200,11 @@ The public edition is intentionally optimized for **one person**: one user's Pro
 
 The private Enterprise edition serves organizations that need AI inside security-sensitive business environments and can include organization-wide controls, private integrations, customer-specific deployment assumptions and proprietary infrastructure coupling.
 
-For that reason, the public repository is **not** produced by copying the Enterprise source tree and deleting a few private files. Components are reviewed, decoupled, cleaned and, where necessary, re-implemented before they are opened. This allows useful functionality to be published without carrying over Enterprise-only operational context or customer-specific security architecture.
+The public repository is **not a copy of the Enterprise codebase with private files removed**. We do not move the Enterprise source code into this repository. Instead, the Enterprise edition acts as a proven product and operational reference: each capability is designed and implemented again for the public edition.
 
-Publishing an Enterprise tree wholesale can also reveal internal integration paths, deployment assumptions and defensive architecture that could unnecessarily expand the information available to attackers studying Enterprise environments. This is not a substitute for secure engineering: both editions must remain secure and reviewable on their own merits.
+Why? The Enterprise edition contains organization-specific integrations, deployment assumptions, access controls, security hardening and infrastructure that are tightly coupled to private business environments. Copying that code directly into the public repository would make the open-source edition harder to understand, audit, fork and run independently. Rebuilding each public capability separately lets us keep the useful ideas and behavior while producing a cleaner, standalone implementation for the community.
 
-The separation is being performed **manually**. During this transition, reviewers may still encounter historical names, compatibility files, source-only modules or Enterprise-era metadata that are not part of the shipped public npm runtime.
+This rewrite is being performed **manually, feature by feature**. During the transition, the public repository may not yet contain every capability available in Enterprise, and reviewers may still encounter historical names, compatibility files or Enterprise-era metadata that are not part of the shipped public npm runtime.
 
 **Target completion date for the current public-repository separation and cleanup: October 19, 2026.**
 
