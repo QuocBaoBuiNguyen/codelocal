@@ -49,7 +49,24 @@ func newWebFrontendProxyFromEnv() (http.Handler, error) {
 }
 
 func isNextPublicAssetPath(path string) bool {
-	return strings.HasPrefix(path, "/_next/") || path == "/favicon.ico" || path == "/codelocal-icon.png" || path == "/demogpt6.html"
+	if strings.HasPrefix(path, "/_next/") {
+		return true
+	}
+	switch path {
+	case "/favicon.ico",
+		"/icon.svg",
+		"/apple-icon.png",
+		"/codelocal-icon.png",
+		"/codelocal-icon-192.png",
+		"/codelocal-icon-512.png",
+		"/opengraph-image",
+		"/twitter-image",
+		"/manifest.webmanifest",
+		"/demogpt6.html":
+		return true
+	default:
+		return false
+	}
 }
 
 var nextDashboardPaths = map[string]struct{}{
