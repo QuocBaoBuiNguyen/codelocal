@@ -42,7 +42,14 @@ export const metadata: Metadata = {
   manifest: "/manifest.webmanifest",
   applicationName: "CodeLocal",
   appleWebApp: { capable: true, title: "CodeLocal", statusBarStyle: "black-translucent" },
-  icons: { icon: "/codelocal-icon.png", apple: "/codelocal-icon.png" },
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "16x16 32x32 48x48 64x64" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    shortcut: "/favicon.ico",
+    apple: [{ url: "/apple-icon.png", sizes: "180x180", type: "image/png" }],
+  },
 };
 
 export const viewport = { themeColor: "#07101a", width: "device-width", initialScale: 1, viewportFit: "cover" as const };
