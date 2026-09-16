@@ -92,14 +92,7 @@ export function PublicBuildNotice() {
     };
 
     const elapsed = Date.now() - readLastShown();
-    if (elapsed >= DISPLAY_INTERVAL_MS) {
-      const now = Date.now();
-      rememberShown(now);
-      setOpen(true);
-      schedule(DISPLAY_INTERVAL_MS);
-    } else {
-      schedule(DISPLAY_INTERVAL_MS - elapsed);
-    }
+    schedule(elapsed >= DISPLAY_INTERVAL_MS ? 0 : DISPLAY_INTERVAL_MS - elapsed);
 
     return () => {
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
