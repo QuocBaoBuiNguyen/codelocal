@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"sort"
 	"strings"
 )
+
+//go:embed launcher.js
+var launcher []byte
 
 type rootManifest struct {
 	Version string `json:"version"`
@@ -61,53 +65,7 @@ func main() {
 		helper.Stderr = os.Stderr
 		must(helper.Run())
 	}
-	launcher := `#!/usr/bin/env node
-const { spawnSync } = require('node:child_process');
-const path = require('node:path');
-const key = process.platform + '-' + process.arch;
-const files = {
-  'darwin-arm64': 'codelocal-darwin-arm64',
-  'darwin-x64': 'codelocal-darwin-x64',
-  'linux-arm64': 'codelocal-linux-arm64',
-  'linux-x64': 'codelocal-linux-x64',
-  'win32-x64': 'codelocal-win32-x64.exe',
-  'win32-arm64': 'codelocal-win32-arm64.exe'
-};
-const helperFiles = {
-  'darwin-arm64': 'computer-darwin-arm64',
-  'darwin-x64': 'computer-darwin-amd64',
-  'linux-arm64': 'computer-linux-arm64',
-  'linux-x64': 'computer-linux-amd64',
-  'win32-x64': 'computer-windows-amd64.exe',
-  'win32-arm64': 'computer-windows-arm64.exe'
-};
-const file = files[key];
-const helperFile = helperFiles[key];
-if (!file || !helperFile) {
-  console.error('CodeLocal does not have native binaries for ' + key + '.');
-  process.exit(1);
-}
-const packageRoot = path.resolve(__dirname, '..');
-const playwrightCli = path.join(packageRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'playwright-cli.cmd' : 'playwright-cli');
-const binary = path.join(__dirname, 'native', file);
-const computerHelper = path.join(__dirname, 'helpers', helperFile);
-const env = {
-  ...process.env,
-  CODELOCAL_PACKAGE_ROOT: packageRoot,
-  CODELOCAL_PLAYWRIGHT_CLI: process.env.CODELOCAL_PLAYWRIGHT_CLI || playwrightCli,
-  CODELOCAL_COMPUTER_HELPER: process.env.CODELOCAL_COMPUTER_HELPER || computerHelper
-};
-const result = spawnSync(binary, process.argv.slice(2), { stdio: 'inherit', env });
-if (result.error) {
-  console.error(result.error.message);
-  process.exit(1);
-}
-if (result.signal) {
-  process.kill(process.pid, result.signal);
-}
-process.exit(result.status ?? 1);
-`
-	must(os.WriteFile(filepath.Join(staging, "bin", "codelocal.js"), []byte(launcher), 0o755))
+	must(os.WriteFile(filepath.Join(staging, "bin", "codelocal.js"), launcher, 0o755))
 	public := map[string]any{
 		"name":        "codelocal",
 		"version":     manifest.Version,
@@ -150,7 +108,7 @@ codelocal .
 ` + "```bash\n" + `codelocal
 ` + "```\n\n" + `On first start, CodeLocal asks which local capabilities connected MCP clients may use. Browser Automation lets a compatible AI client inspect and interact with websites in an isolated session; if enabled, CodeLocal downloads one managed Chromium browser and shows the install progress before starting. Coding works without this optional download. Computer Use remains a separate opt-in capability and includes both the native desktop helper and a managed Mobile MCP backend inside the CodeLocal package. Mobile automation becomes active only when a simulator, emulator or authorized real device is available; Android targets require platform tools/adb and iOS targets require the relevant Xcode/device tooling. Penpot MCP is also packaged as a managed CodeLocal backend: the user does not install a separate MCP server, and CodeLocal starts the local Penpot bridge lazily when its tools are first used.
 
-The Go runtime then pairs this machine if needed, syncs authorized workspaces, and waits for authenticated MCP clients. One machine runs one runtime; multiple workspaces activate lazily inside it.
+The npm launcher checks the selected release channel before normal startup. When a newer CodeLocal package is available it updates itself before launching the native runtime, verifies the installed version, and restarts automatically. Update failures never block CodeLocal: the current runtime continues and shows a manual update command. Set ` + "`CODELOCAL_AUTO_UPDATE=0`" + ` to disable automatic installation while keeping the normal update notice, or ` + "`CODELOCAL_UPDATE_CHECK=0`" + ` to disable update checks entirely.\n\nThe Go runtime then pairs this machine if needed, syncs authorized workspaces, and waits for authenticated MCP clients. One machine runs one runtime; multiple workspaces activate lazily inside it.
 
 Use ` + "`codelocal status`" + ` to inspect it and ` + "`codelocal stop`" + ` to stop it.
 

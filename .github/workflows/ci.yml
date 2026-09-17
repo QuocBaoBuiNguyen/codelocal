@@ -67,6 +67,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
+      - name: Test npm launcher auto-update
+        run: npm run test:launcher
       - name: Build cross-platform npm staging package
         run: go run ./cmd/release
       - name: Inspect npm package

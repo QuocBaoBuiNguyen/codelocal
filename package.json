@@ -11,6 +11,7 @@
     "typecheck": "go vet ./cmd/... ./internal/...",
     "typecheck:web": "npm run typecheck --prefix web",
     "test": "go test ./cmd/... ./internal/...",
+    "test:launcher": "node --test ./cmd/release/launcher.test.js",
     "check:repo": "node ./scripts/check-repository-structure.mjs",
     "web:install": "npm ci --prefix web",
     "web:dev": "npm run dev --prefix web",
@@ -20,8 +21,8 @@
     "ci:web": "npm ci --prefix web && npm run check --prefix web && npm audit --omit=dev --prefix web",
     "ci": "npm run check:repo && npm run ci:go && npm run ci:web",
     "build:npm": "go run ./cmd/release",
-    "release:npm:prepare": "npm run check:repo && npm run ci:go && go run ./cmd/release && npm pack --dry-run ./.release/npm",
-    "release:prepare": "npm run ci && go run ./cmd/release && npm pack --dry-run ./.release/npm",
+    "release:npm:prepare": "npm run check:repo && npm run ci:go && npm run test:launcher && go run ./cmd/release && npm pack --dry-run ./.release/npm",
+    "release:prepare": "npm run ci && npm run test:launcher && go run ./cmd/release && npm pack --dry-run ./.release/npm",
     "release:npm": "(npm whoami --registry=https://registry.npmjs.org/ >/dev/null 2>&1 || npm login --registry=https://registry.npmjs.org/) && npm whoami --registry=https://registry.npmjs.org/ && bash ./scripts/release-npm.sh"
   },
   "engines": {
