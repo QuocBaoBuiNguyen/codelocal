@@ -80,10 +80,21 @@ func maskForumEmail(value string) string {
 	return string(local[0]) + "***@" + strings.Join(maskedLabels, ".")
 }
 
-func toForumTopicResponse(topic cloud.ForumTopic) forumTopicResponse {
+func forumAuthorEmail(value string, reveal bool) string {
+	value = strings.TrimSpace(value)
+	if reveal {
+		if value == "" {
+			return forumAnonymousAuthor
+		}
+		return value
+	}
+	return maskForumEmail(value)
+}
+
+func toForumTopicResponse(topic cloud.ForumTopic, revealAuthorEmail bool) forumTopicResponse {
 	return forumTopicResponse{
 		ID:                topic.ID,
-		AuthorEmail:       maskForumEmail(topic.AuthorEmail),
+		AuthorEmail:       forumAuthorEmail(topic.AuthorEmail, revealAuthorEmail),
 		Kind:              topic.Kind,
 		Title:             topic.Title,
 		Body:              topic.Body,
@@ -109,11 +120,11 @@ func toForumTopicResponse(topic cloud.ForumTopic) forumTopicResponse {
 	}
 }
 
-func toForumCommentResponse(comment cloud.ForumComment) forumCommentResponse {
+func toForumCommentResponse(comment cloud.ForumComment, revealAuthorEmail bool) forumCommentResponse {
 	return forumCommentResponse{
 		ID:          comment.ID,
 		TopicID:     comment.TopicID,
-		AuthorEmail: maskForumEmail(comment.AuthorEmail),
+		AuthorEmail: forumAuthorEmail(comment.AuthorEmail, revealAuthorEmail),
 		Body:        comment.Body,
 		AssetIDs:    comment.AssetIDs,
 		CreatedAt:   comment.CreatedAt,
@@ -121,18 +132,18 @@ func toForumCommentResponse(comment cloud.ForumComment) forumCommentResponse {
 	}
 }
 
-func toForumTopicResponses(topics []cloud.ForumTopic) []forumTopicResponse {
+func toForumTopicResponses(topics []cloud.ForumTopic, revealAuthorEmail bool) []forumTopicResponse {
 	out := make([]forumTopicResponse, 0, len(topics))
 	for _, topic := range topics {
-		out = append(out, toForumTopicResponse(topic))
+		out = append(out, toForumTopicResponse(topic, revealAuthorEmail))
 	}
 	return out
 }
 
-func toForumCommentResponses(comments []cloud.ForumComment) []forumCommentResponse {
+func toForumCommentResponses(comments []cloud.ForumComment, revealAuthorEmail bool) []forumCommentResponse {
 	out := make([]forumCommentResponse, 0, len(comments))
 	for _, comment := range comments {
-		out = append(out, toForumCommentResponse(comment))
+		out = append(out, toForumCommentResponse(comment, revealAuthorEmail))
 	}
 	return out
 }

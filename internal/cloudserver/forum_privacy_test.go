@@ -34,7 +34,7 @@ func TestForumTopicResponseMasksPrivateIdentity(t *testing.T) {
 	payload, err := json.Marshal(toForumTopicResponse(cloud.ForumTopic{
 		ID: "forum_test", AuthorUserID: "user_secret_123", AuthorEmail: "secret@example.com",
 		Kind: "bug", Title: "Public bug", Body: "Details", Status: "open", Tags: []string{}, AssetIDs: []string{},
-	}))
+	}, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestForumCommentResponseMasksPrivateIdentity(t *testing.T) {
 	payload, err := json.Marshal(toForumCommentResponse(cloud.ForumComment{
 		ID: "comment_test", TopicID: "forum_test", AuthorUserID: "user_comment_secret", AuthorEmail: "reply@company.dev",
 		Body: "Reply", AssetIDs: []string{},
-	}))
+	}, false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,5 +65,23 @@ func TestForumCommentResponseMasksPrivateIdentity(t *testing.T) {
 	}
 	if !strings.Contains(body, `"authorEmail":"r***@c***.dev"`) {
 		t.Fatalf("forum comment response did not return masked email: %s", body)
+	}
+}
+
+func TestForumResponsesRevealFullEmailToAdmin(t *testing.T) {
+	topic := toForumTopicResponse(cloud.ForumTopic{
+		ID: "forum_admin", AuthorUserID: "user_private", AuthorEmail: "admin-visible@example.com",
+		Kind: "question", Title: "Admin view", Body: "Details", Status: "open", Tags: []string{}, AssetIDs: []string{},
+	}, true)
+	if topic.AuthorEmail != "admin-visible@example.com" {
+		t.Fatalf("admin topic response email = %q, want full email", topic.AuthorEmail)
+	}
+
+	comment := toForumCommentResponse(cloud.ForumComment{
+		ID: "comment_admin", TopicID: "forum_admin", AuthorUserID: "user_comment_private", AuthorEmail: "reply-visible@company.dev",
+		Body: "Reply", AssetIDs: []string{},
+	}, true)
+	if comment.AuthorEmail != "reply-visible@company.dev" {
+		t.Fatalf("admin comment response email = %q, want full email", comment.AuthorEmail)
 	}
 }

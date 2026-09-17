@@ -83,7 +83,8 @@ func (s *Server) forumTopicsAPI(w http.ResponseWriter, r *http.Request) {
 			writeForumAPIError(w, err)
 			return
 		}
-		webutil.JSON(w, http.StatusOK, map[string]any{"topics": toForumTopicResponses(topics), "isAdmin": cloud.IsAdminEmail(identity.User.Email)})
+		isAdmin := cloud.IsAdminEmail(identity.User.Email)
+		webutil.JSON(w, http.StatusOK, map[string]any{"topics": toForumTopicResponses(topics, isAdmin), "isAdmin": isAdmin})
 		return
 	}
 
@@ -102,7 +103,7 @@ func (s *Server) forumTopicsAPI(w http.ResponseWriter, r *http.Request) {
 		writeForumAPIError(w, err)
 		return
 	}
-	webutil.JSON(w, http.StatusCreated, map[string]any{"topic": toForumTopicResponse(topic)})
+	webutil.JSON(w, http.StatusCreated, map[string]any{"topic": toForumTopicResponse(topic, cloud.IsAdminEmail(identity.User.Email))})
 }
 
 func (s *Server) forumTopicAPI(w http.ResponseWriter, r *http.Request) {
@@ -126,10 +127,11 @@ func (s *Server) forumTopicAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	topic.VotedByViewer = voted
+	isAdmin := cloud.IsAdminEmail(identity.User.Email)
 	webutil.JSON(w, http.StatusOK, map[string]any{
-		"topic":    toForumTopicResponse(topic),
-		"comments": toForumCommentResponses(comments),
-		"isAdmin":  cloud.IsAdminEmail(identity.User.Email),
+		"topic":    toForumTopicResponse(topic, isAdmin),
+		"comments": toForumCommentResponses(comments, isAdmin),
+		"isAdmin":  isAdmin,
 	})
 }
 
@@ -148,7 +150,7 @@ func (s *Server) forumCommentAPI(w http.ResponseWriter, r *http.Request) {
 		writeForumAPIError(w, err)
 		return
 	}
-	webutil.JSON(w, http.StatusCreated, map[string]any{"comment": toForumCommentResponse(comment)})
+	webutil.JSON(w, http.StatusCreated, map[string]any{"comment": toForumCommentResponse(comment, cloud.IsAdminEmail(identity.User.Email))})
 }
 
 func (s *Server) forumVoteAPI(w http.ResponseWriter, r *http.Request) {
@@ -186,7 +188,7 @@ func (s *Server) adminForumTopicAPI(w http.ResponseWriter, r *http.Request) {
 		writeForumAPIError(w, err)
 		return
 	}
-	webutil.JSON(w, http.StatusOK, map[string]any{"topic": toForumTopicResponse(topic)})
+	webutil.JSON(w, http.StatusOK, map[string]any{"topic": toForumTopicResponse(topic, true)})
 }
 
 func (s *Server) adminForumTopicDeleteAPI(w http.ResponseWriter, r *http.Request) {
