@@ -172,8 +172,9 @@ func TestDashboardVisionRoutingPrefersVisionTargets(t *testing.T) {
 		}
 	}
 
-	if target, ok := dashboardChatVisionTarget(dashboardModelAuto, dashboardLLMRoute(dashboardModelAuto, false)); !ok || target.Model != "gpt-5.6-sol" {
-		t.Fatalf("chat vision target must resolve the vision lane: %#v %v", target, ok)
+	userVisionRoute := []dashboardLLMTarget{{ID: "byo:test", Model: "user-vision", Vision: true}}
+	if target, ok := dashboardChatVisionTarget(dashboardModelAuto, userVisionRoute); !ok || target.Model != "user-vision" {
+		t.Fatalf("chat vision target must stay on the prepared user route: %#v %v", target, ok)
 	}
 }
 
@@ -187,7 +188,7 @@ func TestDashboardVisionBlockedWithoutVisionLane(t *testing.T) {
 	if got := dashboardVisionRoute(dashboardModelAuto); len(got) != 0 {
 		t.Fatalf("vision route without vision providers must be empty: %#v", got)
 	}
-	if msg := dashboardVisionBlockedMessage(); !strings.Contains(msg, "CODELOCAL_SHOPAIKEY_API_KEY") || strings.Contains(msg, "Pool") {
-		t.Fatalf("vision blocked message must name the fix: %q", msg)
+	if msg := dashboardVisionBlockedMessage(); !strings.Contains(msg, "vision-capable") || strings.Contains(msg, "CODELOCAL_SHOPAIKEY_API_KEY") {
+		t.Fatalf("vision blocked message must point to the user's configured provider: %q", msg)
 	}
 }

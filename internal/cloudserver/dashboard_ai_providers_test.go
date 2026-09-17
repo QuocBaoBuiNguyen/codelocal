@@ -27,7 +27,7 @@ func TestDashboardUserModelSelectionRoundTrip(t *testing.T) {
 func TestDashboardUserProviderRouteIsSticky(t *testing.T) {
 	selection := dashboardUserModelSelection("abcDEF_1234567890", "gpt-5.6-sol")
 	target := dashboardLLMTarget{ID: selection, BaseURL: "https://api.example.com/v1", APIKeyBytes: []byte("secret"), Model: "gpt-5.6-sol", Vision: true}
-	ctx := context.WithValue(context.Background(), dashboardUserProviderRouteKey{}, dashboardUserProviderRoute{Selection: selection, Target: target})
+	ctx := context.WithValue(context.Background(), dashboardUserProviderRouteKey{}, dashboardUserProviderRoute{Selection: selection, Targets: []dashboardLLMTarget{target}})
 	route := dashboardLLMRouteWithContext(ctx, selection, false, true)
 	if len(route) != 1 || route[0].ID != selection || route[0].BaseURL != target.BaseURL {
 		t.Fatalf("user-owned selection must remain pinned to its provider: %#v", route)

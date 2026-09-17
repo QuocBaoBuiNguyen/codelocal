@@ -51,25 +51,39 @@ CREATE INDEX IF NOT EXISTS idx_codelocal_ai_providers_user_updated
 `
 
 const (
-	AIProviderProtocolOpenAICompatible = "openai_compatible"
-	aiProviderCredentialBackend        = "local-kek-aes-gcm-v1"
+	AIProviderProtocolOpenAICompatible  = "openai_compatible"
+	AIProviderProtocolChatCompletions   = "chat_completions"
+	AIProviderProtocolResponses         = "responses"
+	AIProviderProtocolAnthropicMessages = "anthropic_messages"
+	aiProviderCredentialBackend         = "local-kek-aes-gcm-v1"
 )
 
+const aiProviderFormatsMigrationSQL = `
+ALTER TABLE codelocal_ai_providers
+ ADD COLUMN IF NOT EXISTS model_labels JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE codelocal_ai_providers
+ DROP CONSTRAINT IF EXISTS codelocal_ai_providers_protocol_check;
+ALTER TABLE codelocal_ai_providers
+ ADD CONSTRAINT codelocal_ai_providers_protocol_check
+ CHECK (protocol IN ('openai_compatible','chat_completions','responses','anthropic_messages'));
+`
+
 type AIProvider struct {
-	ID              string   `json:"id"`
-	UserID          string   `json:"-"`
-	Name            string   `json:"name"`
-	BaseURL         string   `json:"baseUrl"`
-	Protocol        string   `json:"protocol"`
-	Models          []string `json:"models"`
-	DefaultModel    string   `json:"defaultModel,omitempty"`
-	Enabled         bool     `json:"enabled"`
-	HasCredential   bool     `json:"hasCredential"`
-	LastTestStatus  string   `json:"lastTestStatus,omitempty"`
-	LastTestMessage string   `json:"lastTestMessage,omitempty"`
-	LastTestAt      int64    `json:"lastTestAt,omitempty"`
-	CreatedAt       int64    `json:"createdAt"`
-	UpdatedAt       int64    `json:"updatedAt"`
+	ID              string            `json:"id"`
+	UserID          string            `json:"-"`
+	Name            string            `json:"name"`
+	BaseURL         string            `json:"baseUrl"`
+	Protocol        string            `json:"protocol"`
+	Models          []string          `json:"models"`
+	ModelLabels     map[string]string `json:"modelLabels,omitempty"`
+	DefaultModel    string            `json:"defaultModel,omitempty"`
+	Enabled         bool              `json:"enabled"`
+	HasCredential   bool              `json:"hasCredential"`
+	LastTestStatus  string            `json:"lastTestStatus,omitempty"`
+	LastTestMessage string            `json:"lastTestMessage,omitempty"`
+	LastTestAt      int64             `json:"lastTestAt,omitempty"`
+	CreatedAt       int64             `json:"createdAt"`
+	UpdatedAt       int64             `json:"updatedAt"`
 }
 
 func normalizeAIProviderName(value string) string {
@@ -83,11 +97,35 @@ func normalizeAIProviderName(value string) string {
 
 func normalizeAIProviderProtocol(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "", "openai", "openai-compatible", AIProviderProtocolOpenAICompatible:
-		return AIProviderProtocolOpenAICompatible
+	case "", "openai", "openai-compatible", AIProviderProtocolOpenAICompatible, "chat", "chat-completions", AIProviderProtocolChatCompletions:
+		return AIProviderProtocolChatCompletions
+	case "response", "openai-responses", AIProviderProtocolResponses:
+		return AIProviderProtocolResponses
+	case "anthropic", "messages", "anthropic-messages", AIProviderProtocolAnthropicMessages:
+		return AIProviderProtocolAnthropicMessages
 	default:
 		return ""
 	}
+}
+
+func normalizeAIProviderModelLabels(models []string, labels map[string]string) map[string]string {
+	allowed := make(map[string]bool, len(models))
+	for _, model := range models {
+		allowed[model] = true
+	}
+	out := map[string]string{}
+	for model, label := range labels {
+		model, label = strings.TrimSpace(model), strings.TrimSpace(label)
+		if !allowed[model] || label == "" {
+			continue
+		}
+		runes := []rune(label)
+		if len(runes) > 100 {
+			label = string(runes[:100])
+		}
+		out[model] = label
+	}
+	return out
 }
 
 func NormalizeAIProviderBaseURL(value string) (string, error) {
@@ -252,7 +290,7 @@ func ZeroAIProviderCredential(value []byte) {
 	zeroAIProviderBytes(value)
 }
 
-func (s *Store) CreateAIProvider(ctx context.Context, userID, name, baseURL, protocol, apiKey string, models []string) (AIProvider, error) {
+func (s *Store) CreateAIProvider(ctx context.Context, userID, name, baseURL, protocol, apiKey string, models []string, modelLabels map[string]string) (AIProvider, error) {
 	if s == nil || s.DB == nil || strings.TrimSpace(userID) == "" {
 		return AIProvider{}, errors.New("AI provider store unavailable")
 	}
@@ -276,6 +314,11 @@ func (s *Store) CreateAIProvider(ctx context.Context, userID, name, baseURL, pro
 	if protocol == "" {
 		return AIProvider{}, errors.New("unsupported provider protocol")
 	}
+	models = normalizeAIProviderModels(models)
+	if len(models) == 0 {
+		return AIProvider{}, errors.New("at least one model is required")
+	}
+	modelLabels = normalizeAIProviderModelLabels(models, modelLabels)
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" || len(apiKey) > 16384 {
 		return AIProvider{}, errors.New("provider API key is required")
@@ -287,33 +330,33 @@ func (s *Store) CreateAIProvider(ctx context.Context, userID, name, baseURL, pro
 	if err != nil {
 		return AIProvider{}, err
 	}
-	models = normalizeAIProviderModels(models)
-	defaultModel := ""
-	if len(models) > 0 {
-		defaultModel = models[0]
-	}
+	defaultModel := models[0]
 	modelsRaw, _ := json.Marshal(models)
+	labelsRaw, _ := json.Marshal(modelLabels)
 	now := time.Now().UnixMilli()
-	_, err = s.DB.Exec(ctx, `INSERT INTO codelocal_ai_providers(id,user_id,name,base_url,protocol,models,default_model,enabled,key_backend,wrap_nonce,wrapped_dek,secret_nonce,secret_ciphertext,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,TRUE,$8,$9,$10,$11,$12,$13,$13)`, id, userID, name, baseURL, protocol, modelsRaw, defaultModel, aiProviderCredentialBackend, wrapNonce, wrappedDEK, secretNonce, ciphertext, now)
+	_, err = s.DB.Exec(ctx, `INSERT INTO codelocal_ai_providers(id,user_id,name,base_url,protocol,models,model_labels,default_model,enabled,key_backend,wrap_nonce,wrapped_dek,secret_nonce,secret_ciphertext,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9,$10,$11,$12,$13,$14,$14)`, id, userID, name, baseURL, protocol, modelsRaw, labelsRaw, defaultModel, aiProviderCredentialBackend, wrapNonce, wrappedDEK, secretNonce, ciphertext, now)
 	if err != nil {
 		return AIProvider{}, err
 	}
-	return AIProvider{ID: id, UserID: userID, Name: name, BaseURL: baseURL, Protocol: protocol, Models: models, DefaultModel: defaultModel, Enabled: true, HasCredential: true, CreatedAt: now, UpdatedAt: now}, nil
+	return AIProvider{ID: id, UserID: userID, Name: name, BaseURL: baseURL, Protocol: protocol, Models: models, ModelLabels: modelLabels, DefaultModel: defaultModel, Enabled: true, HasCredential: true, CreatedAt: now, UpdatedAt: now}, nil
 }
 
-const aiProviderSelectColumns = `id,user_id,name,base_url,protocol,models,default_model,enabled,key_backend,secret_ciphertext,last_test_status,last_test_message,last_test_at,created_at,updated_at`
+const aiProviderSelectColumns = `id,user_id,name,base_url,protocol,models,model_labels,default_model,enabled,key_backend,secret_ciphertext,last_test_status,last_test_message,last_test_at,created_at,updated_at`
 
 func scanAIProvider(row pgx.Row) (AIProvider, error) {
 	var out AIProvider
-	var modelsRaw []byte
+	var modelsRaw, labelsRaw []byte
 	var keyBackend string
 	var ciphertext []byte
-	err := row.Scan(&out.ID, &out.UserID, &out.Name, &out.BaseURL, &out.Protocol, &modelsRaw, &out.DefaultModel, &out.Enabled, &keyBackend, &ciphertext, &out.LastTestStatus, &out.LastTestMessage, &out.LastTestAt, &out.CreatedAt, &out.UpdatedAt)
+	err := row.Scan(&out.ID, &out.UserID, &out.Name, &out.BaseURL, &out.Protocol, &modelsRaw, &labelsRaw, &out.DefaultModel, &out.Enabled, &keyBackend, &ciphertext, &out.LastTestStatus, &out.LastTestMessage, &out.LastTestAt, &out.CreatedAt, &out.UpdatedAt)
 	if err != nil {
 		return out, err
 	}
 	_ = json.Unmarshal(modelsRaw, &out.Models)
 	out.Models = normalizeAIProviderModels(out.Models)
+	_ = json.Unmarshal(labelsRaw, &out.ModelLabels)
+	out.ModelLabels = normalizeAIProviderModelLabels(out.Models, out.ModelLabels)
+	out.Protocol = normalizeAIProviderProtocol(out.Protocol)
 	out.HasCredential = keyBackend != "" && len(ciphertext) > 0
 	return out, nil
 }
@@ -327,14 +370,17 @@ func (s *Store) ListAIProviders(ctx context.Context, userID string) ([]AIProvide
 	out := []AIProvider{}
 	for rows.Next() {
 		var provider AIProvider
-		var modelsRaw []byte
+		var modelsRaw, labelsRaw []byte
 		var keyBackend string
 		var ciphertext []byte
-		if err := rows.Scan(&provider.ID, &provider.UserID, &provider.Name, &provider.BaseURL, &provider.Protocol, &modelsRaw, &provider.DefaultModel, &provider.Enabled, &keyBackend, &ciphertext, &provider.LastTestStatus, &provider.LastTestMessage, &provider.LastTestAt, &provider.CreatedAt, &provider.UpdatedAt); err != nil {
+		if err := rows.Scan(&provider.ID, &provider.UserID, &provider.Name, &provider.BaseURL, &provider.Protocol, &modelsRaw, &labelsRaw, &provider.DefaultModel, &provider.Enabled, &keyBackend, &ciphertext, &provider.LastTestStatus, &provider.LastTestMessage, &provider.LastTestAt, &provider.CreatedAt, &provider.UpdatedAt); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal(modelsRaw, &provider.Models)
 		provider.Models = normalizeAIProviderModels(provider.Models)
+		_ = json.Unmarshal(labelsRaw, &provider.ModelLabels)
+		provider.ModelLabels = normalizeAIProviderModelLabels(provider.Models, provider.ModelLabels)
+		provider.Protocol = normalizeAIProviderProtocol(provider.Protocol)
 		provider.HasCredential = keyBackend != "" && len(ciphertext) > 0
 		out = append(out, provider)
 	}
@@ -345,7 +391,7 @@ func (s *Store) GetAIProvider(ctx context.Context, userID, providerID string) (A
 	return scanAIProvider(s.DB.QueryRow(ctx, `SELECT `+aiProviderSelectColumns+` FROM codelocal_ai_providers WHERE user_id=$1 AND id=$2`, userID, strings.TrimSpace(providerID)))
 }
 
-func (s *Store) UpdateAIProvider(ctx context.Context, userID, providerID, name, baseURL, protocol string, models []string, enabled bool) error {
+func (s *Store) UpdateAIProvider(ctx context.Context, userID, providerID, name, baseURL, protocol string, models []string, modelLabels map[string]string, enabled bool) error {
 	name = normalizeAIProviderName(name)
 	if name == "" {
 		return errors.New("provider name is required")
@@ -360,12 +406,14 @@ func (s *Store) UpdateAIProvider(ctx context.Context, userID, providerID, name, 
 		return errors.New("unsupported provider protocol")
 	}
 	models = normalizeAIProviderModels(models)
-	defaultModel := ""
-	if len(models) > 0 {
-		defaultModel = models[0]
+	if len(models) == 0 {
+		return errors.New("at least one model is required")
 	}
+	modelLabels = normalizeAIProviderModelLabels(models, modelLabels)
+	defaultModel := models[0]
 	modelsRaw, _ := json.Marshal(models)
-	command, err := s.DB.Exec(ctx, `UPDATE codelocal_ai_providers SET name=$3,base_url=$4,protocol=$5,models=$6,default_model=$7,enabled=$8,updated_at=$9 WHERE user_id=$1 AND id=$2`, userID, providerID, name, baseURL, protocol, modelsRaw, defaultModel, enabled, time.Now().UnixMilli())
+	labelsRaw, _ := json.Marshal(modelLabels)
+	command, err := s.DB.Exec(ctx, `UPDATE codelocal_ai_providers SET name=$3,base_url=$4,protocol=$5,models=$6,model_labels=$7,default_model=$8,enabled=$9,updated_at=$10 WHERE user_id=$1 AND id=$2`, userID, providerID, name, baseURL, protocol, modelsRaw, labelsRaw, defaultModel, enabled, time.Now().UnixMilli())
 	if err != nil {
 		return err
 	}

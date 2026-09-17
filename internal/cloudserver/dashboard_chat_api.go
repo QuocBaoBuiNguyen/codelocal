@@ -129,10 +129,7 @@ func dashboardChatStoredImage(req dashboardChatRequest) string {
 // dashboardChatCompactEphemeralImage caps multipart data-url payloads before
 // persisting so image history survives turn 2 while the DB row stays bounded.
 // The 1.5MB cap keeps ~1MB source images intact after base64 inflation.
-func dashboardChatVisionTarget(selection string, route []dashboardLLMTarget) (dashboardLLMTarget, bool) {
-	if visionRoute := dashboardVisionRoute(selection); len(visionRoute) > 0 {
-		return visionRoute[0], true
-	}
+func dashboardChatVisionTarget(_ string, route []dashboardLLMTarget) (dashboardLLMTarget, bool) {
 	for _, target := range route {
 		if target.Vision {
 			return target, true
@@ -512,6 +509,7 @@ const (
 	dashboardProtocolUnsupported dashboardLLMProtocol = iota
 	dashboardProtocolChatCompletions
 	dashboardProtocolResponses
+	dashboardProtocolAnthropicMessages
 )
 
 func dashboardUsesZen(baseURL string) bool {
@@ -666,33 +664,16 @@ func (s *Server) dashboardModelsAPI(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	models, err := dashboardSelectableModels(r.Context())
-	if err != nil {
-		slog.Warn("dashboard ranked model catalog unavailable; using Auto only", "error", err)
-	}
 	userModels, userOptions := dashboardUserModelOptions(r.Context(), s, identity.User.ID)
-	models = dashboardMergeModelSelections(models, userModels)
-	options := make([]dashboardModelOption, 0, len(models)+len(userOptions))
-	custom := map[string]bool{}
-	for _, option := range userOptions {
-		custom[option.ID] = true
+	if len(userModels) == 0 {
+		webutil.JSON(w, http.StatusOK, map[string]any{"models": []string{}, "model_options": []dashboardModelOption{}, "default_model": ""})
+		return
 	}
-	for _, model := range models {
-		if custom[model] {
-			continue
-		}
-		label := model
-		if model == dashboardModelAuto {
-			label = "Auto"
-		}
-		options = append(options, dashboardModelOption{ID: model, Label: label, Provider: "CodeLocal"})
-	}
+	models := append([]string{dashboardModelAuto}, userModels...)
+	options := make([]dashboardModelOption, 0, len(userOptions)+1)
+	options = append(options, dashboardModelOption{ID: dashboardModelAuto, Label: "Auto", Provider: "Your AI"})
 	options = append(options, userOptions...)
-	webutil.JSON(w, http.StatusOK, map[string]any{
-		"models":        models,
-		"model_options": options,
-		"default_model": dashboardModelAuto,
-	})
+	webutil.JSON(w, http.StatusOK, map[string]any{"models": models, "model_options": options, "default_model": dashboardModelAuto})
 }
 
 func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
@@ -842,7 +823,15 @@ func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
 	providerCleanup := func() {}
 	r, providerCleanup, err = s.dashboardPrepareUserProviderRoute(r, identity.User.ID, selection)
 	if err != nil {
-		webutil.JSON(w, http.StatusBadRequest, map[string]string{"error": "Selected AI provider is unavailable or failed its security check."})
+		status := http.StatusBadRequest
+		message := "Selected AI provider is unavailable or failed its security check."
+		if strings.Contains(err.Error(), "no user AI model is configured") {
+			status = http.StatusConflict
+			message = "Configure at least one AI provider and model before chatting."
+		} else if strings.Contains(err.Error(), "not configured by this user") {
+			message = "Selected AI model is not configured by this user."
+		}
+		webutil.JSON(w, status, map[string]string{"error": message})
 		return
 	}
 	defer providerCleanup()
@@ -853,15 +842,9 @@ func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
 	hasImage := strings.TrimSpace(req.Image) != "" || req.ImageMeta != nil
 	route := dashboardLLMRouteWithContext(r.Context(), selection, allowCommunity, false)
 	if hasImage {
-		// A user-owned model is sticky: never leak an image to a different
-		// system provider merely because that provider also supports vision.
-		// Built-in Auto keeps the existing vision fallback behavior.
-		_, _, userOwnedSelection := dashboardParseUserModelSelection(selection)
-		if !userOwnedSelection {
-			if visionRoute := dashboardVisionRoute(selection); len(visionRoute) > 0 {
-				route = visionRoute
-			}
-		}
+		// /chat is BYO-only: image requests may only use vision-capable
+		// targets from the user's prepared provider route. Never substitute a
+		// server/environment model, including when the selection is Auto.
 		visionCapable := route[:0]
 		for _, target := range route {
 			if target.Vision {
@@ -869,6 +852,9 @@ func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		route = visionCapable
+		if len(route) > 0 {
+			r = dashboardWithUserProviderRoutes(r, selection, route)
+		}
 	}
 	isStream := r.URL.Query().Get("stream") == "1" || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 	if isStream {
@@ -889,7 +875,6 @@ func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
 		if accessRequested {
 			writeSSE("access_mode", dashboardAccessEvent(accessChoice, accessLabel, executionWorkspace))
 		}
-		// Mock stream when no configured route is available.
 		if len(route) == 0 {
 			if hasImage {
 				nowVision := time.Now().UnixMilli()
@@ -899,47 +884,7 @@ func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
 				writeSSE("error", map[string]string{"error": dashboardVisionBlockedMessage()})
 				return
 			}
-			if len(dashboardLLMRouteWithContext(r.Context(), selection, true, false)) > 0 {
-				nowBlocked := time.Now().UnixMilli()
-				if err := s.saveDashboardChatMessage(r, cloud.DashboardChatMessage{ID: dashboardChatMessageID(r, identity.User.ID, "user"), UserID: identity.User.ID, Role: "user", Content: msg, ToolCalls: json.RawMessage(`[]`), Image: storedImage, CreatedAt: nowBlocked}); err != nil {
-					slog.Warn("dashboard chat stream blocked save user failed", "error", err)
-				}
-				writeSSE("error", map[string]string{"error": dashboardCommunityBlockedMessage()})
-				return
-			}
-			lower2 := strings.ToLower(msg)
-			var tcs []dashboardToolCall
-			var reply string
-			if req.Image != "" {
-				tcs = []dashboardToolCall{{ID: "mock_img", Name: "image_upload", Arguments: `{"size":` + fmt.Sprintf("%d", len(req.Image)) + `}`, Result: `{"received":true}`, DurationMs: 30, Status: "done"}}
-				reply = "Đã nhận ảnh stream (" + fmt.Sprintf("%d", len(req.Image)) + " bytes) — đã lưu backend."
-			} else if strings.Contains(lower2, "workspace") {
-				tcs = []dashboardToolCall{{ID: "mock_1", Name: "list_workspaces", Arguments: `{"status":"all"}`, Result: `{"total":26,"sample":["codex-mcp","X.com","BIDDI"]}`, DurationMs: 42, Status: "done"}}
-				reply = "Đây là workspaces của bạn (Go mock stream):"
-			} else if strings.Contains(lower2, "device") || strings.Contains(lower2, "máy") {
-				tcs = []dashboardToolCall{{ID: "mock_2", Name: "list_devices", Arguments: `{}`, Result: `{"paired":1,"online":1}`, DurationMs: 18, Status: "done"}}
-				reply = "Thiết bị đã pair (Go mock stream):"
-			} else {
-				reply = "CodeLocal Go (mock - chưa gắn key LLM nào): đã nhận \"" + msg + "\". Gắn key trên Railway variables để chat thật."
-			}
-			if len(tcs) > 0 {
-				writeSSE("tool_calls", map[string]any{"tool_calls": tcs})
-				time.Sleep(120 * time.Millisecond)
-			}
-			// stream reply by words like opencode text-delta
-			for _, wrd := range strings.Split(reply, " ") {
-				writeSSE("delta", map[string]any{"delta": wrd + " "})
-				time.Sleep(35 * time.Millisecond)
-			}
-			writeSSE("done", map[string]any{"reply": reply, "tool_calls": tcs, "mock": true, "model": dashboardPublicModelName, "threadId": effectiveThreadID})
-			now2 := time.Now().UnixMilli()
-			tcsJSON2, _ := json.Marshal(tcs)
-			if err := s.saveDashboardChatMessage(r, cloud.DashboardChatMessage{ID: dashboardChatMessageID(r, identity.User.ID, "user"), UserID: identity.User.ID, Role: "user", Content: msg, ToolCalls: json.RawMessage(`[]`), Image: storedImage, CreatedAt: now2}); err != nil {
-				slog.Warn("dashboard chat stream mock save user failed", "error", err)
-			}
-			if err := s.saveDashboardChatMessage(r, cloud.DashboardChatMessage{ID: dashboardChatMessageID(r, identity.User.ID, "assistant"), UserID: identity.User.ID, Role: "assistant", Content: reply, ToolCalls: json.RawMessage(tcsJSON2), CreatedAt: now2 + 1}); err != nil {
-				slog.Warn("dashboard chat stream mock save assistant failed", "error", err)
-			}
+			writeSSE("error", map[string]string{"error": "Configure at least one AI provider and model before chatting."})
 			return
 		}
 		// Real LLM stream: proxy OpenAI SSE, handle tool_calls and second call if needed.
@@ -950,9 +895,6 @@ func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
 			msgs = append(msgs, dashboardAccessResumeInstruction(accessChoice, accessLabel, executionWorkspace))
 		}
 		if req.Image != "" {
-			if visionTarget, ok := dashboardChatVisionTarget(selection, route); ok {
-				selection = visionTarget.Model
-			}
 			msgs = append(msgs, map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": msg}, {"type": "image_url", "image_url": map[string]any{"url": req.Image}}}})
 		} else {
 			msgs = append(msgs, map[string]any{"role": "user", "content": msg})
@@ -978,52 +920,16 @@ func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	lower := strings.ToLower(msg)
 	if len(route) == 0 {
 		if hasImage {
 			nowVision := time.Now().UnixMilli()
 			if err := s.saveDashboardChatMessage(r, cloud.DashboardChatMessage{ID: dashboardChatMessageID(r, identity.User.ID, "user"), UserID: identity.User.ID, Role: "user", Content: msg, ToolCalls: json.RawMessage(`[]`), Image: storedImage, CreatedAt: nowVision}); err != nil {
 				slog.Warn("dashboard chat vision-blocked save user failed", "error", err, "user", identity.User.ID)
 			}
-			webutil.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": dashboardVisionBlockedMessage()})
+			webutil.JSON(w, http.StatusBadRequest, map[string]string{"error": dashboardVisionBlockedMessage()})
 			return
 		}
-		if len(dashboardLLMRouteWithContext(r.Context(), selection, true, false)) > 0 {
-			nowBlocked := time.Now().UnixMilli()
-			if err := s.saveDashboardChatMessage(r, cloud.DashboardChatMessage{ID: dashboardChatMessageID(r, identity.User.ID, "user"), UserID: identity.User.ID, Role: "user", Content: msg, ToolCalls: json.RawMessage(`[]`), Image: storedImage, CreatedAt: nowBlocked}); err != nil {
-				slog.Warn("dashboard chat blocked save user failed", "error", err, "user", identity.User.ID)
-			}
-			webutil.JSON(w, http.StatusBadRequest, map[string]string{"error": dashboardCommunityBlockedMessage()})
-			return
-		}
-		var tcs []dashboardToolCall
-		var reply string
-		if req.Image != "" {
-			tcs = []dashboardToolCall{{ID: "mock_img", Name: "image_upload", Arguments: `{"size":` + fmt.Sprintf("%d", len(req.Image)) + `}`, Result: `{"received":true}`, DurationMs: 30, Status: "done"}}
-			reply = "Đã nhận ảnh (" + fmt.Sprintf("%d", len(req.Image)) + " bytes) — CodeLocal sẽ phân tích khi model vision được gắn. Hiện mock đã lưu ảnh vào history backend."
-		} else if strings.Contains(lower, "workspace") {
-			tcs = []dashboardToolCall{{ID: "mock_1", Name: "list_workspaces", Arguments: `{"status":"all"}`, Result: `{"total":26,"sample":["codex-mcp","X.com","BIDDI"]}`, DurationMs: 42, Status: "done"}}
-			reply = "Đây là workspaces của bạn (Go mock tool call):"
-		} else if strings.Contains(lower, "device") || strings.Contains(lower, "máy") {
-			tcs = []dashboardToolCall{{ID: "mock_2", Name: "list_devices", Arguments: `{}`, Result: `{"paired":1,"online":1}`, DurationMs: 18, Status: "done"}}
-			reply = "Thiết bị đã pair (Go mock):"
-		} else if strings.Contains(lower, "brain") || strings.Contains(lower, "memory") {
-			tcs = []dashboardToolCall{{ID: "mock_3", Name: "search_project_brain", Arguments: `{"query":` + jsonQuote(msg) + `}`, Result: `{"hits":3}`, DurationMs: 55, Status: "done"}}
-			reply = "Kết quả Project Brain (Go mock):"
-		} else {
-			reply = "CodeLocal Go (mock - chưa gắn key LLM nào): đã nhận \"" + msg + "\". Gắn key trên Railway variables (OPENCODE_ZEN_API_KEY hoặc CODELOCAL_SHOPAIKEY_API_KEY) để chat thật."
-		}
-		// persist to backend (not FE localStorage)
-		now := time.Now().UnixMilli()
-		tcsJSON, _ := json.Marshal(tcs)
-		// image handled: save with image field for backend history
-		if err := s.saveDashboardChatMessage(r, cloud.DashboardChatMessage{ID: dashboardChatMessageID(r, identity.User.ID, "user"), UserID: identity.User.ID, Role: "user", Content: msg, ToolCalls: json.RawMessage(`[]`), Image: storedImage, CreatedAt: now}); err != nil {
-			slog.Warn("dashboard chat save user failed", "error", err, "user", identity.User.ID)
-		}
-		if err := s.saveDashboardChatMessage(r, cloud.DashboardChatMessage{ID: dashboardChatMessageID(r, identity.User.ID, "assistant"), UserID: identity.User.ID, Role: "assistant", Content: reply, ToolCalls: json.RawMessage(tcsJSON), CreatedAt: now + 1}); err != nil {
-			slog.Warn("dashboard chat save assistant failed", "error", err)
-		}
-		webutil.JSON(w, http.StatusOK, map[string]any{"reply": reply, "tool_calls": tcs, "mock": true, "model": dashboardPublicModelName, "threadId": effectiveThreadID})
+		webutil.JSON(w, http.StatusConflict, map[string]string{"error": "Configure at least one AI provider and model before chatting."})
 		return
 	}
 	system := dashboardChatSystemPrompt(promptWorkspace, autoResolved) + "\n\n" + dashboardChatModeInstruction(req.Mode, req.Goal)
@@ -1043,13 +949,6 @@ func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("dashboard chat save user before execution failed", "error", err)
 	}
 	allowModelFallback := dashboardChatModeFromRequest(r) == "agent"
-	// Task 1: resolve the vision lane before the batch call so image requests
-	// use a vision-capable model instead of the text-only community default.
-	if hasImage {
-		if visionTarget, ok := dashboardChatVisionTarget(selection, route); ok {
-			selection = visionTarget.Model
-		}
-	}
 	target, toolCalls, content, err := callDashboardLLMWithToolsContext(r.Context(), selection, allowCommunity, allowModelFallback, messages, chatTools)
 	if err != nil {
 		webutil.JSON(w, http.StatusBadGateway, map[string]string{"error": "upstream: " + err.Error()})
@@ -1440,11 +1339,17 @@ func callChatCompletionsWithTools(baseURL, apiKey, model string, messages []map[
 }
 
 func callLLMWithTools(baseURL, apiKey, model string, messages []map[string]any, tools []map[string]any) ([]llmToolCall, string, error) {
-	switch dashboardProtocolForModel(baseURL, model) {
+	return callLLMWithToolsProtocol(dashboardProtocolForModel(baseURL, model), baseURL, apiKey, model, messages, tools)
+}
+
+func callLLMWithToolsProtocol(protocol dashboardLLMProtocol, baseURL, apiKey, model string, messages []map[string]any, tools []map[string]any) ([]llmToolCall, string, error) {
+	switch protocol {
 	case dashboardProtocolResponses:
 		return callResponsesWithTools(baseURL, apiKey, model, messages, tools)
 	case dashboardProtocolChatCompletions:
 		return callChatCompletionsWithTools(baseURL, apiKey, model, messages, tools)
+	case dashboardProtocolAnthropicMessages:
+		return callAnthropicMessagesWithTools(baseURL, apiKey, model, messages, tools)
 	default:
 		return nil, "", &httpError{Status: http.StatusBadRequest, Body: "unsupported model protocol"}
 	}
@@ -1649,9 +1554,15 @@ func proxyResponsesStream(w http.ResponseWriter, flusher http.Flusher, baseURL, 
 }
 
 func proxyLLMStream(w http.ResponseWriter, flusher http.Flusher, baseURL, apiKey, model string, messages []map[string]any, tools []map[string]any, r *http.Request, s *Server, userID string) error {
-	switch dashboardProtocolForModel(baseURL, model) {
+	return proxyLLMStreamProtocol(dashboardProtocolForModel(baseURL, model), w, flusher, baseURL, apiKey, model, messages, tools, r, s, userID)
+}
+
+func proxyLLMStreamProtocol(protocol dashboardLLMProtocol, w http.ResponseWriter, flusher http.Flusher, baseURL, apiKey, model string, messages []map[string]any, tools []map[string]any, r *http.Request, s *Server, userID string) error {
+	switch protocol {
 	case dashboardProtocolResponses:
 		return proxyResponsesStream(w, flusher, baseURL, apiKey, model, messages, tools, r, s, userID)
+	case dashboardProtocolAnthropicMessages:
+		return proxyAnthropicMessagesStream(w, flusher, baseURL, apiKey, model, messages, tools, r, s, userID)
 	case dashboardProtocolUnsupported:
 		return &httpError{Status: http.StatusBadRequest, Body: "unsupported model protocol"}
 	}

@@ -2,10 +2,8 @@ package cloudserver
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -20,12 +18,13 @@ import (
 const dashboardUserModelPrefix = "byo:"
 
 type dashboardAIProviderMutation struct {
-	Name     string   `json:"name"`
-	BaseURL  string   `json:"baseUrl"`
-	APIKey   string   `json:"apiKey,omitempty"`
-	Protocol string   `json:"protocol,omitempty"`
-	Models   []string `json:"models,omitempty"`
-	Enabled  *bool    `json:"enabled,omitempty"`
+	Name        string            `json:"name"`
+	BaseURL     string            `json:"baseUrl"`
+	APIKey      string            `json:"apiKey,omitempty"`
+	Protocol    string            `json:"protocol,omitempty"`
+	Models      []string          `json:"models,omitempty"`
+	ModelLabels map[string]string `json:"modelLabels,omitempty"`
+	Enabled     *bool             `json:"enabled,omitempty"`
 }
 
 type dashboardModelOption struct {
@@ -156,7 +155,7 @@ func (s *Server) dashboardAIProvidersAPI(w http.ResponseWriter, r *http.Request)
 			dashboardAIProviderError(w, err)
 			return
 		}
-		provider, err := s.Store.CreateAIProvider(r.Context(), identity.User.ID, input.Name, input.BaseURL, input.Protocol, input.APIKey, input.Models)
+		provider, err := s.Store.CreateAIProvider(r.Context(), identity.User.ID, input.Name, input.BaseURL, input.Protocol, input.APIKey, input.Models, input.ModelLabels)
 		if err != nil {
 			dashboardAIProviderError(w, err)
 			return
@@ -201,6 +200,9 @@ func (s *Server) dashboardAIProviderAPI(w http.ResponseWriter, r *http.Request) 
 		if input.Models != nil {
 			provider.Models = input.Models
 		}
+		if input.ModelLabels != nil {
+			provider.ModelLabels = input.ModelLabels
+		}
 		if input.Enabled != nil {
 			provider.Enabled = *input.Enabled
 		}
@@ -208,7 +210,7 @@ func (s *Server) dashboardAIProviderAPI(w http.ResponseWriter, r *http.Request) 
 			dashboardAIProviderError(w, err)
 			return
 		}
-		if err := s.Store.UpdateAIProvider(r.Context(), identity.User.ID, providerID, provider.Name, provider.BaseURL, provider.Protocol, provider.Models, provider.Enabled); err != nil {
+		if err := s.Store.UpdateAIProvider(r.Context(), identity.User.ID, providerID, provider.Name, provider.BaseURL, provider.Protocol, provider.Models, provider.ModelLabels, provider.Enabled); err != nil {
 			dashboardAIProviderError(w, err)
 			return
 		}
@@ -235,56 +237,26 @@ func (s *Server) dashboardAIProviderAPI(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-func dashboardProbeProviderModels(ctx context.Context, baseURL string, credential []byte) ([]string, error) {
-	if err := dashboardProviderNetworkSafe(ctx, baseURL); err != nil {
-		return nil, err
+func dashboardTestProviderConnection(ctx context.Context, provider cloud.AIProvider, credential []byte) error {
+	if err := dashboardProviderNetworkSafe(ctx, provider.BaseURL); err != nil {
+		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/models", nil)
-	if err != nil {
-		return nil, err
+	if len(provider.Models) == 0 {
+		return errors.New("provider has no configured model")
 	}
-	// The key exists in plaintext only for this outbound request. The owning
-	// byte buffer is zeroized by the caller immediately after the probe.
-	req.Header.Set("Authorization", "Bearer "+string(credential))
-	req.Header.Set("Accept", "application/json")
-	client := &http.Client{
-		Timeout:       15 * time.Second,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+	protocol, ok := dashboardProtocolForUserProvider(provider.Protocol)
+	if !ok {
+		return errors.New("unsupported provider protocol")
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("provider returned HTTP %d", resp.StatusCode)
-	}
-	var payload struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, errors.New("provider model catalog is not OpenAI-compatible")
-	}
-	models := make([]string, 0, min(len(payload.Data), 200))
-	seen := map[string]bool{}
-	for _, item := range payload.Data {
-		candidate := dashboardProviderModel{ID: item.ID, SupportedEndpointTypes: []string{"openai"}}
-		model := strings.TrimSpace(item.ID)
-		if dashboardModelSupportsChat(candidate) && !seen[model] {
-			seen[model] = true
-			models = append(models, model)
-			if len(models) == 200 {
-				break
-			}
-		}
-	}
-	return models, nil
+	_, _, err := callLLMWithToolsProtocol(
+		protocol,
+		provider.BaseURL,
+		string(credential),
+		provider.Models[0],
+		[]map[string]any{{"role": "user", "content": "Reply with OK."}},
+		nil,
+	)
+	return err
 }
 
 func (s *Server) dashboardAIProviderTestAPI(w http.ResponseWriter, r *http.Request) {
@@ -309,19 +281,16 @@ func (s *Server) dashboardAIProviderTestAPI(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	defer cloud.ZeroAIProviderCredential(credential)
-	models, probeErr := dashboardProbeProviderModels(r.Context(), provider.BaseURL, credential)
+	probeErr := dashboardTestProviderConnection(r.Context(), provider, credential)
 	if probeErr != nil {
 		_ = s.Store.UpdateAIProviderProbe(r.Context(), identity.User.ID, providerID, "error", probeErr.Error(), nil)
 		webutil.JSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "Could not verify this provider. Your saved key was not exposed."})
 		return
 	}
-	message := fmt.Sprintf("Connected · %d chat models detected", len(models))
-	if len(models) == 0 {
-		message = "Connected · no chat models were advertised"
-	}
-	_ = s.Store.UpdateAIProviderProbe(r.Context(), identity.User.ID, providerID, "ok", message, models)
+	message := "Connected · provider verified"
+	_ = s.Store.UpdateAIProviderProbe(r.Context(), identity.User.ID, providerID, "ok", message, nil)
 	updated, _ := s.Store.GetAIProvider(r.Context(), identity.User.ID, providerID)
-	webutil.JSON(w, http.StatusOK, map[string]any{"ok": true, "provider": updated, "models": models})
+	webutil.JSON(w, http.StatusOK, map[string]any{"ok": true, "provider": updated})
 }
 
 func dashboardMergeModelSelections(groups ...[]string) []string {
@@ -360,58 +329,118 @@ func dashboardUserModelOptions(ctx context.Context, s *Server, userID string) ([
 			if len(selection) > 240 {
 				continue
 			}
+			label := strings.TrimSpace(provider.ModelLabels[model])
+			if label == "" {
+				label = model
+			}
 			ids = append(ids, selection)
-			options = append(options, dashboardModelOption{ID: selection, Label: model, Provider: provider.Name, ProviderID: provider.ID, Custom: true})
+			options = append(options, dashboardModelOption{ID: selection, Label: label, Provider: provider.Name, ProviderID: provider.ID, Custom: true})
 		}
 	}
 	return ids, options
 }
 
+func dashboardProtocolForUserProvider(value string) (dashboardLLMProtocol, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case cloud.AIProviderProtocolOpenAICompatible, cloud.AIProviderProtocolChatCompletions:
+		return dashboardProtocolChatCompletions, true
+	case cloud.AIProviderProtocolResponses:
+		return dashboardProtocolResponses, true
+	case cloud.AIProviderProtocolAnthropicMessages:
+		return dashboardProtocolAnthropicMessages, true
+	default:
+		return dashboardProtocolUnsupported, false
+	}
+}
+
 type dashboardUserProviderRoute struct {
 	Selection string
-	Target    dashboardLLMTarget
+	Targets   []dashboardLLMTarget
 }
 
 type dashboardUserProviderRouteKey struct{}
 
-func dashboardWithUserProviderRoute(r *http.Request, selection string, target dashboardLLMTarget) *http.Request {
-	return r.WithContext(context.WithValue(r.Context(), dashboardUserProviderRouteKey{}, dashboardUserProviderRoute{Selection: selection, Target: target}))
+func dashboardWithUserProviderRoutes(r *http.Request, selection string, targets []dashboardLLMTarget) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), dashboardUserProviderRouteKey{}, dashboardUserProviderRoute{Selection: selection, Targets: targets}))
 }
 
-func dashboardUserProviderRouteFromContext(ctx context.Context, selection string) (dashboardLLMTarget, bool) {
+func dashboardUserProviderRoutesFromContext(ctx context.Context, selection string) ([]dashboardLLMTarget, bool) {
 	state, ok := ctx.Value(dashboardUserProviderRouteKey{}).(dashboardUserProviderRoute)
-	if !ok || state.Selection != selection {
-		return dashboardLLMTarget{}, false
+	if !ok || state.Selection != selection || len(state.Targets) == 0 {
+		return nil, false
 	}
-	return state.Target, true
+	return state.Targets, true
 }
 
 func (s *Server) dashboardPrepareUserProviderRoute(r *http.Request, userID, selection string) (*http.Request, func(), error) {
+	selection = dashboardNormalizeModelSelection(selection)
+	credentials := [][]byte{}
+	cleanup := func() {
+		for _, credential := range credentials {
+			cloud.ZeroAIProviderCredential(credential)
+		}
+	}
+	prepare := func(provider cloud.AIProvider, requestedModels []string) ([]dashboardLLMTarget, error) {
+		if !provider.Enabled || !provider.HasCredential {
+			return nil, nil
+		}
+		protocol, ok := dashboardProtocolForUserProvider(provider.Protocol)
+		if !ok {
+			return nil, errors.New("selected provider protocol is unavailable")
+		}
+		if err := dashboardProviderNetworkSafe(r.Context(), provider.BaseURL); err != nil {
+			return nil, err
+		}
+		credential, err := s.Store.MaterializeAIProviderCredential(r.Context(), userID, provider.ID)
+		if err != nil {
+			return nil, err
+		}
+		credentials = append(credentials, credential)
+		targets := make([]dashboardLLMTarget, 0, len(requestedModels))
+		for _, model := range requestedModels {
+			if !dashboardProviderModelsContain(provider, model) {
+				continue
+			}
+			targets = append(targets, dashboardLLMTarget{ID: dashboardUserModelSelection(provider.ID, model), BaseURL: provider.BaseURL, APIKeyBytes: credential, Model: model, Protocol: protocol, Vision: dashboardModelSupportsVision(model)})
+		}
+		return targets, nil
+	}
+	if selection == dashboardModelAuto {
+		providers, err := s.Store.ListAIProviders(r.Context(), userID)
+		if err != nil {
+			return r, cleanup, err
+		}
+		targets := []dashboardLLMTarget{}
+		for _, provider := range providers {
+			providerTargets, err := prepare(provider, provider.Models)
+			if err != nil {
+				cleanup()
+				return r, func() {}, err
+			}
+			targets = append(targets, providerTargets...)
+		}
+		if len(targets) == 0 {
+			cleanup()
+			return r, func() {}, errors.New("no user AI model is configured")
+		}
+		return dashboardWithUserProviderRoutes(r, selection, targets), cleanup, nil
+	}
 	providerID, model, ok := dashboardParseUserModelSelection(selection)
 	if !ok {
-		return r, func() {}, nil
+		return r, func() {}, errors.New("selected AI model is not configured by this user")
 	}
 	provider, err := s.Store.GetAIProvider(r.Context(), userID, providerID)
 	if err != nil {
 		return r, func() {}, err
 	}
-	if !provider.Enabled || !dashboardProviderModelsContain(provider, model) {
+	targets, err := prepare(provider, []string{model})
+	if err != nil {
+		cleanup()
+		return r, func() {}, err
+	}
+	if len(targets) == 0 {
+		cleanup()
 		return r, func() {}, errors.New("selected provider model is unavailable")
 	}
-	if err := dashboardProviderNetworkSafe(r.Context(), provider.BaseURL); err != nil {
-		return r, func() {}, err
-	}
-	credential, err := s.Store.MaterializeAIProviderCredential(r.Context(), userID, providerID)
-	if err != nil {
-		return r, func() {}, err
-	}
-	target := dashboardLLMTarget{
-		ID:          "byo:" + providerID + ":" + model,
-		BaseURL:     provider.BaseURL,
-		APIKeyBytes: credential,
-		Model:       model,
-		Vision:      dashboardModelSupportsVision(model),
-	}
-	prepared := dashboardWithUserProviderRoute(r, selection, target)
-	return prepared, func() { cloud.ZeroAIProviderCredential(credential) }, nil
+	return dashboardWithUserProviderRoutes(r, selection, targets), cleanup, nil
 }

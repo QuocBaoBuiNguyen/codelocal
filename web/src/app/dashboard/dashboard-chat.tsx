@@ -201,7 +201,7 @@ function waitForChatRetry(delayMs: number, signal: AbortSignal) {
 }
 
 function friendlyChatFailure(raw: string, t: ReturnType<typeof useTranslations>["t"], translateMessage: ReturnType<typeof useTranslations>["message"]) {
-  if (/model vision|chưa có model vision/i.test(raw)) {
+  if (/vision-capable|does not support images|model vision|chưa có model vision/i.test(raw)) {
     return t("CodeLocal does not have a vision model available for this image. Configure CODELOCAL_SHOPAIKEY_API_KEY with a vision-capable model such as gpt-* and try again.");
   }
   if (/chưa bật upload ảnh|media_upload_incomplete|media_not_configured/i.test(raw)) {
@@ -242,9 +242,9 @@ export function DashboardChat() {
   });
   const [threadActionLoading, setThreadActionLoading] = useState(true);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [models, setModels] = useState<string[]>(["auto"]);
-  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([{ id: "auto", label: "Auto", provider: "CodeLocal" }]);
-  const [selectedModel, setSelectedModel] = useState("auto");
+  const [models, setModels] = useState<string[]>([]);
+  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [providerManagerOpen, setProviderManagerOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
@@ -352,7 +352,7 @@ export function DashboardChat() {
     [modelOptions],
   );
   const labelForModel = (model: string) => modelOptionMap.get(model)?.label || modelLabel(model);
-  const providerForModel = (model: string) => modelOptionMap.get(model)?.provider || "CodeLocal";
+  const providerForModel = (model: string) => modelOptionMap.get(model)?.provider || "Your AI";
   const visibleModels = useMemo(() => {
     const query = modelSearch.trim().toLocaleLowerCase(locale);
     if (!query) return activeModels;
@@ -465,7 +465,7 @@ export function DashboardChat() {
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setSelectedModel(activeThreadModel && models.includes(activeThreadModel) ? activeThreadModel : "auto");
+      setSelectedModel(activeThreadModel && models.includes(activeThreadModel) ? activeThreadModel : (models.includes("auto") ? "auto" : models[0] || ""));
       const storedWorkspace = activeThreadWorkspaceKey || "auto";
       setSelectedWorkspaceKey(storedWorkspace === "auto" || workspaceItems.some((workspace) => workspaceKey(workspace) === storedWorkspace) ? storedWorkspace : "auto");
     });
@@ -477,19 +477,19 @@ export function DashboardChat() {
       const response = await fetch("/api/v1/dashboard/models", { credentials: "include" });
       if (!response.ok) throw new Error(String(response.status));
       const data = (await response.json()) as { models?: string[]; model_options?: ChatModelOption[]; default_model?: string };
-      const available = Array.isArray(data.models) && data.models.length ? data.models : ["auto"];
-      const options = Array.isArray(data.model_options) && data.model_options.length
+      const available = Array.isArray(data.models) ? data.models.filter((model) => typeof model === "string" && model.trim()) : [];
+      const options = Array.isArray(data.model_options)
         ? data.model_options.filter((option) => option && typeof option.id === "string" && available.includes(option.id))
-        : available.map((id) => ({ id, label: modelLabel(id), provider: "CodeLocal" } satisfies ChatModelOption));
+        : [];
       setModels(available);
       setModelOptions(options);
       setSelectedModel((current) => preserveSelection && available.includes(current)
         ? current
-        : data.default_model && available.includes(data.default_model) ? data.default_model : available[0]);
+        : data.default_model && available.includes(data.default_model) ? data.default_model : available[0] || "");
     } catch {
-      setModels(["auto"]);
-      setModelOptions([{ id: "auto", label: "Auto", provider: "CodeLocal" }]);
-      setSelectedModel("auto");
+      setModels([]);
+      setModelOptions([]);
+      setSelectedModel("");
     }
   }
 
@@ -824,6 +824,11 @@ export function DashboardChat() {
     quickMessageRef.current = null;
     const text = (quickMessage ?? input).trim();
     if ((!text && !image) || loading || imageUploading || historyLoading || threadActionLoading) return;
+    if (!selectedModel || activeModels.length === 0) {
+      setNotice({ kind: "error", text: "Add an AI provider and at least one model before sending a message." });
+      setProviderManagerOpen(true);
+      return;
+    }
     let requestThreadId = activeThreadId;
     if (!requestThreadId) {
       try {
@@ -1246,7 +1251,7 @@ export function DashboardChat() {
                 aria-expanded={modelPickerOpen}
                 onClick={() => setModelPickerOpen((open) => !open)}
               >
-                <span className={styles.modelPickerName}>{labelForModel(selectedModel)}</span>
+                <span className={styles.modelPickerName}>{selectedModel ? labelForModel(selectedModel) : "No AI model"}</span>
                 {activeModels.length > 0 ? <span className={styles.modelPickerCount}>{activeModels.length}</span> : null}
                 <span className={styles.modelPickerChevron} aria-hidden="true">⌄</span>
               </button>
@@ -1264,7 +1269,7 @@ export function DashboardChat() {
                   </label>
                   <div className={styles.modelPickerSummary}>{t("{count} active models", { count: activeModels.length })}</div>
                   <div className={styles.modelOptionList} role="listbox" aria-label={t("Active models")}>
-                    {!modelSearch.trim() ? (
+                    {!modelSearch.trim() && models.includes("auto") ? (
                       <button
                         className={`${styles.modelOption} ${selectedModel === "auto" ? styles.modelOptionActive : ""}`}
                         type="button"
@@ -1297,7 +1302,7 @@ export function DashboardChat() {
                         <small>{modelOptionMap.get(model)?.custom ? `${providerForModel(model)} · ${model}` : providerForModel(model)}</small>
                       </button>
                     ))}
-                    {visibleModels.length === 0 ? <p className={styles.modelEmpty}>{t("No active models found.")}</p> : null}
+                    {visibleModels.length === 0 ? <p className={styles.modelEmpty}>{activeModels.length === 0 ? "No AI model configured yet." : t("No active models found.")}</p> : null}
                   </div>
                   <button
                     className={styles.manageAIButton}
@@ -1387,7 +1392,7 @@ export function DashboardChat() {
                 {goal ? <button className={styles.goalClear} type="button" onClick={() => setGoal("")} aria-label={t("Clear goal")} disabled={loading}><AppIcon name="close" size={11} /></button> : null}
               </label>
             </div>
-            <button className={`${styles.sendBtn} ${loading ? styles.stopBtn : ""}`} type={loading ? "button" : "submit"} onClick={loading ? stopStream : undefined} disabled={loading ? false : imageUploading || historyLoading || threadActionLoading || (!input.trim() && !image)} aria-label={loading ? t("Stop response") : t("Send")} title={loading ? t("Stop response") : t("Send")}>
+            <button className={`${styles.sendBtn} ${loading ? styles.stopBtn : ""}`} type={loading ? "button" : "submit"} onClick={loading ? stopStream : undefined} disabled={loading ? false : imageUploading || historyLoading || threadActionLoading || activeModels.length === 0 || (!input.trim() && !image)} aria-label={loading ? t("Stop response") : t("Send")} title={loading ? t("Stop response") : activeModels.length === 0 ? "Add an AI provider first" : t("Send")}>
               <AppIcon name={loading ? "stop" : "send"} size={loading ? 16 : 18} />
             </button>
           </div>

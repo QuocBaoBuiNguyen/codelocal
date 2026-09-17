@@ -27,10 +27,18 @@ type dashboardLLMTarget struct {
 	APIKey      string
 	APIKeyBytes []byte
 	Model       string
+	Protocol    dashboardLLMProtocol
 	Community   bool
 	// Vision marks chat targets that accept image_url/input_image blocks.
 	// Community text-only targets stay false.
 	Vision bool
+}
+
+func dashboardTargetProtocol(target dashboardLLMTarget) dashboardLLMProtocol {
+	if target.Protocol != dashboardProtocolUnsupported {
+		return target.Protocol
+	}
+	return dashboardProtocolForModel(target.BaseURL, target.Model)
 }
 
 func dashboardTargetAPIKey(target dashboardLLMTarget) string {
@@ -175,7 +183,7 @@ func dashboardVisionRoute(selection string) []dashboardLLMTarget {
 // dashboardVisionBlockedMessage explains why an image request has no vision
 // route instead of falling back to the generic mock reply.
 func dashboardVisionBlockedMessage() string {
-	return "CodeLocal chưa có model vision khả dụng cho ảnh này. Bạn gắn CODELOCAL_SHOPAIKEY_API_KEY với model vision như gpt-* rồi gửi lại ảnh."
+	return "The selected AI provider/model does not support images. Configure a vision-capable model in AI providers and try again."
 }
 
 func dashboardEmperoTarget(model string) dashboardLLMTarget {
@@ -293,8 +301,8 @@ func dashboardLLMRoute(selection string, allowCommunity bool) []dashboardLLMTarg
 
 func dashboardLLMRouteWithContext(ctx context.Context, selection string, allowCommunity, _ bool) []dashboardLLMTarget {
 	selection = dashboardNormalizeModelSelection(selection)
-	if target, ok := dashboardUserProviderRouteFromContext(ctx, selection); ok {
-		return []dashboardLLMTarget{target}
+	if targets, ok := dashboardUserProviderRoutesFromContext(ctx, selection); ok {
+		return targets
 	}
 	return dashboardLLMRoute(selection, allowCommunity)
 }
@@ -440,7 +448,7 @@ func callDashboardLLMWithToolsContext(ctx context.Context, selection string, all
 					break
 				}
 			}
-			calls, content, err := callLLMWithTools(target.BaseURL, dashboardTargetAPIKey(target), target.Model, messages, tools)
+			calls, content, err := callLLMWithToolsProtocol(dashboardTargetProtocol(target), target.BaseURL, dashboardTargetAPIKey(target), target.Model, messages, tools)
 			if err == nil {
 				err = dashboardValidateToolCalls(calls)
 			}
@@ -534,7 +542,7 @@ func proxyDashboardLLMRouteStream(w http.ResponseWriter, flusher http.Flusher, s
 				}
 			}
 			tracked := &dashboardCountingWriter{ResponseWriter: w}
-			err := proxyLLMStream(tracked, flusher, target.BaseURL, dashboardTargetAPIKey(target), target.Model, messages, tools, r, s, userID)
+			err := proxyLLMStreamProtocol(dashboardTargetProtocol(target), tracked, flusher, target.BaseURL, dashboardTargetAPIKey(target), target.Model, messages, tools, r, s, userID)
 			if err == nil {
 				dashboardMarkTargetHealthy(target)
 				return target, nil
