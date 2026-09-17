@@ -341,8 +341,11 @@ func validateCredential(ctx context.Context, base string, c identity.Credential)
 		_ = json.NewDecoder(resp.Body).Decode(&result)
 		return true, strings.TrimSpace(result.Email), nil
 	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+	if resp.StatusCode == http.StatusUnauthorized && strings.TrimSpace(resp.Header.Get("X-CodeLocal-Auth-Check")) == "credential-v1" {
 		return false, "", nil
+	}
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+		return false, "", fmt.Errorf("CodeLocal credential check is ambiguous on this gateway (%d); the stored credential was kept. Update the gateway or run `codelocal login --force` if you intentionally want to pair again", resp.StatusCode)
 	}
 	return false, "", fmt.Errorf("CodeLocal credential check failed (%d)", resp.StatusCode)
 }

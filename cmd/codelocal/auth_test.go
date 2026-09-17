@@ -90,15 +90,17 @@ func TestRevokeRemoteCredentialDoesNotRetryPermanentFailure(t *testing.T) {
 func TestValidateCredentialStatusClassification(t *testing.T) {
 	credential := identity.Credential{CredentialID: "cld_test", CredentialSecret: "secret"}
 	tests := []struct {
-		name      string
-		status    int
-		wantValid bool
-		wantErr   bool
+		name        string
+		status      int
+		confirmedV1 bool
+		wantValid   bool
+		wantErr     bool
 	}{
 		{name: "valid", status: http.StatusOK, wantValid: true},
-		{name: "revoked", status: http.StatusUnauthorized},
-		{name: "forbidden", status: http.StatusForbidden},
-		{name: "missing", status: http.StatusNotFound},
+		{name: "confirmed revoked", status: http.StatusUnauthorized, confirmedV1: true},
+		{name: "legacy unauthorized is ambiguous", status: http.StatusUnauthorized, wantErr: true},
+		{name: "forbidden is ambiguous", status: http.StatusForbidden, wantErr: true},
+		{name: "missing endpoint is ambiguous", status: http.StatusNotFound, wantErr: true},
 		{name: "server failure is transient", status: http.StatusInternalServerError, wantErr: true},
 		{name: "rate limited is transient", status: http.StatusTooManyRequests, wantErr: true},
 	}
@@ -106,6 +108,9 @@ func TestValidateCredentialStatusClassification(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
+				if test.confirmedV1 {
+					w.Header().Set("X-CodeLocal-Auth-Check", "credential-v1")
+				}
 				w.WriteHeader(test.status)
 				if test.status == http.StatusOK {
 					_, _ = w.Write([]byte(`{"email":"user@example.com"}`))

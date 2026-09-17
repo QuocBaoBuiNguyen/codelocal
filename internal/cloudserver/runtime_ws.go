@@ -3,11 +3,13 @@ package cloudserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"time"
 
 	"github.com/0xmarkhydra/codelocal/internal/cloud"
+	"github.com/0xmarkhydra/codelocal/internal/deviceauth"
 	"github.com/coder/websocket"
 )
 
@@ -57,6 +59,13 @@ func writeRuntimeRealtime(parent context.Context, conn *websocket.Conn, value an
 	return conn.Write(ctx, websocket.MessageText, raw)
 }
 
+func runtimeDeviceProofClose(err error) (websocket.StatusCode, string) {
+	if errors.Is(err, deviceauth.ErrClockSkew) {
+		return websocket.StatusCode(4408), "DEVICE_CLOCK_SKEW"
+	}
+	return websocket.StatusCode(4402), "DEVICE_SIGNATURE_INVALID"
+}
+
 func (s *Server) RegisterRuntimeRealtime() {
 	s.Mux.HandleFunc("GET /api/client/runtime/ws", s.runtimeRealtime)
 }
@@ -85,15 +94,18 @@ func (s *Server) runtimeRealtime(w http.ResponseWriter, r *http.Request) {
 	}
 	device, err := s.Store.AuthenticateDevice(ctx, register.CredentialID, cloud.HashSecret(register.Secret))
 	if err != nil || device == nil || device.UserID == "" {
+		// 4403 remains reserved for genuinely invalid/revoked credentials so
+		// already-installed clients preserve their existing behavior.
 		_ = conn.Close(websocket.StatusCode(4403), "AUTH_FAILED")
 		return
 	}
 	if err := s.verifySignedDeviceRequest(r, device); err != nil {
-		_ = conn.Close(websocket.StatusCode(4403), "DEVICE_SIGNATURE_INVALID")
+		code, reason := runtimeDeviceProofClose(err)
+		_ = conn.Close(code, reason)
 		return
 	}
 	if register.DeviceID != "" && register.DeviceID != device.DeviceID {
-		_ = conn.Close(websocket.StatusCode(4403), "DEVICE_ID_MISMATCH")
+		_ = conn.Close(websocket.StatusCode(4409), "DEVICE_ID_MISMATCH")
 		return
 	}
 	workspaceIDs := sanitizeRuntimeWorkspaceIDs(register.WorkspaceIDs)
