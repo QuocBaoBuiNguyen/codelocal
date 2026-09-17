@@ -349,6 +349,7 @@ func compactToolDefinitions() []compactToolDef {
 		[]string{"list", "select", "info", "access", "remember", "recall", "skills", "devices", "paired_devices", "rename_device", "revoke_device", "approvals", "revoke_approval", "reset_approvals", "security", "security_smoke_test"},
 		map[string]any{
 			"key":          str("Workspace key returned by action=list."),
+			"makeDefault":  boolean("For action=select, persist this workspace as the user's default across future MCP sessions. Set true only when the user explicitly asks to remember the choice."),
 			"mode":         map[string]any{"type": "string", "enum": []string{"prompt", "smart", "full"}, "description": "Access mode for action=access."},
 			"query":        str("Focused natural-language memory query for action=recall."),
 			"limit":        integer("Maximum recalled memories or learned skills.", 1, 20),

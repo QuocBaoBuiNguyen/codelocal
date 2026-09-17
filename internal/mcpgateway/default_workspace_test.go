@@ -7,18 +7,7 @@ import (
 )
 
 func defaultWorkspaceFixture(key, workspaceID, status string, lastSeenAt int64) gateway.WorkspaceView {
-	return gateway.WorkspaceView{Key: key, WorkspaceID: workspaceID, Status: status, LastSeenAt: lastSeenAt}
-}
-
-func TestSelectDefaultWorkspaceKeyPrefersMostRecentlySeenActiveWorkspace(t *testing.T) {
-	catalog := []gateway.WorkspaceView{
-		defaultWorkspaceFixture("u::d::alpha", "alpha", "active", 100),
-		defaultWorkspaceFixture("u::d::beta", "beta", "active", 500),
-		defaultWorkspaceFixture("u::d::sleepy", "sleepy", "sleeping", 900),
-	}
-	if got := selectDefaultWorkspaceKey(catalog, ""); got != "u::d::beta" {
-		t.Fatalf("key=%q want the most recently seen active workspace", got)
-	}
+	return gateway.WorkspaceView{Key: key, WorkspaceID: workspaceID, WorkspaceName: workspaceID, Status: status, Authorized: true, LastSeenAt: lastSeenAt}
 }
 
 func TestSelectDefaultWorkspaceKeyHonorsConfiguredIDOrKey(t *testing.T) {
@@ -27,73 +16,92 @@ func TestSelectDefaultWorkspaceKeyHonorsConfiguredIDOrKey(t *testing.T) {
 		defaultWorkspaceFixture("u::d::beta", "beta", "active", 500),
 	}
 	if got := selectDefaultWorkspaceKey(catalog, "alpha"); got != "u::d::alpha" {
-		t.Fatalf("workspace-id override resolved to %q", got)
+		t.Fatalf("workspace-id default resolved to %q", got)
 	}
-	if got := selectDefaultWorkspaceKey(catalog, "u::d::alpha"); got != "u::d::alpha" {
-		t.Fatalf("full-key override resolved to %q", got)
-	}
-	// An override naming a workspace that is not on this machine must not
-	// resolve: routing always stays inside the authorized set.
-	if got := selectDefaultWorkspaceKey(catalog, "gamma"); got != "" {
-		t.Fatalf("unknown override resolved to %q want empty", got)
+	if got := selectDefaultWorkspaceKey(catalog, "u::d::beta"); got != "u::d::beta" {
+		t.Fatalf("full-key default resolved to %q", got)
 	}
 }
 
-func TestSelectDefaultWorkspaceKeyPrefersActiveOverMoreRecentlySeenSleeping(t *testing.T) {
+func TestSelectDefaultWorkspaceKeyDoesNotGuessBetweenMultipleActiveWorkspaces(t *testing.T) {
+	catalog := []gateway.WorkspaceView{
+		defaultWorkspaceFixture("u::d::alpha", "alpha", "active", 100),
+		defaultWorkspaceFixture("u::d::beta", "beta", "active", 900),
+	}
+	if got := selectDefaultWorkspaceKey(catalog, ""); got != "" {
+		t.Fatalf("key=%q; multiple active projects must require user selection", got)
+	}
+}
+
+func TestSelectDefaultWorkspaceKeyAutoUsesSingleActiveWorkspace(t *testing.T) {
 	catalog := []gateway.WorkspaceView{
 		defaultWorkspaceFixture("u::d::awake", "awake", "active", 100),
-		defaultWorkspaceFixture("u::d::sleepy", "sleepy", "sleeping", 900),
+		defaultWorkspaceFixture("u::d::old", "old", "sleeping", 900),
 	}
 	if got := selectDefaultWorkspaceKey(catalog, ""); got != "u::d::awake" {
-		t.Fatalf("key=%q want the active workspace over a newer sleeping one", got)
+		t.Fatalf("key=%q want sole active workspace", got)
 	}
 }
 
-func TestSelectDefaultWorkspaceKeyUsesSleepingWorkspaceWhenNothingIsActive(t *testing.T) {
-	// A sleeping workspace is authorized and its runtime is online, so an
-	// unattended sessionless client can still be routed to the project the
-	// operator used last instead of failing before it can do anything.
+func TestSelectDefaultWorkspaceKeyAutoWakesSingleSleepingWorkspace(t *testing.T) {
+	catalog := []gateway.WorkspaceView{defaultWorkspaceFixture("u::d::sleepy", "sleepy", "sleeping", 100)}
+	if got := selectDefaultWorkspaceKey(catalog, ""); got != "u::d::sleepy" {
+		t.Fatalf("key=%q want sole sleeping workspace", got)
+	}
+}
+
+func TestSelectDefaultWorkspaceKeyDoesNotGuessBetweenSleepingWorkspaces(t *testing.T) {
 	catalog := []gateway.WorkspaceView{
 		defaultWorkspaceFixture("u::d::old", "old", "sleeping", 100),
 		defaultWorkspaceFixture("u::d::recent", "recent", "sleeping", 900),
 	}
-	if got := selectDefaultWorkspaceKey(catalog, ""); got != "u::d::recent" {
-		t.Fatalf("key=%q want most recently seen sleeping workspace", got)
+	if got := selectDefaultWorkspaceKey(catalog, ""); got != "" {
+		t.Fatalf("key=%q; LastSeenAt must not choose between projects", got)
 	}
 }
 
-func TestSelectDefaultWorkspaceKeyIgnoresUnauthorizedEntries(t *testing.T) {
-	// device_offline entries are not routable even when configured explicitly.
-	catalog := []gateway.WorkspaceView{
-		defaultWorkspaceFixture("u::d::gone", "gone", "device_offline", 9999),
-	}
+func TestSelectDefaultWorkspaceKeyIgnoresUnauthorizedOrOfflineDefault(t *testing.T) {
+	unauthorized := defaultWorkspaceFixture("u::d::gone", "gone", "sleeping", 9999)
+	unauthorized.Authorized = false
+	catalog := []gateway.WorkspaceView{unauthorized}
 	if got := selectDefaultWorkspaceKey(catalog, "gone"); got != "" {
-		t.Fatalf("offline device resolved to %q want empty", got)
+		t.Fatalf("unauthorized default resolved to %q", got)
 	}
-	if got := selectDefaultWorkspaceKey(catalog, ""); got != "" {
-		t.Fatalf("key=%q want empty", got)
+	catalog = []gateway.WorkspaceView{defaultWorkspaceFixture("u::d::gone", "gone", "device_offline", 9999)}
+	if got := selectDefaultWorkspaceKey(catalog, "gone"); got != "" {
+		t.Fatalf("offline default resolved to %q", got)
 	}
 }
 
-func TestSelectDefaultWorkspaceKeySkipsManagedSystemProjects(t *testing.T) {
-	catalog := []gateway.WorkspaceView{
-		defaultWorkspaceFixture("u::d::system-openmontage", "system-openmontage", "active", 5000),
-		defaultWorkspaceFixture("u::d::codex", "Codex-fbd20013ed", "active", 100),
-	}
+func TestSelectDefaultWorkspaceKeySkipsManagedSystemProjectsImplicitly(t *testing.T) {
+	system := defaultWorkspaceFixture("u::d::system-openmontage", "system-openmontage", "active", 5000)
+	system.System = true
+	catalog := []gateway.WorkspaceView{system, defaultWorkspaceFixture("u::d::codex", "codex", "active", 100)}
 	if got := selectDefaultWorkspaceKey(catalog, ""); got != "u::d::codex" {
-		t.Fatalf("key=%q want the operator project, not CodeLocal's managed workspace", got)
+		t.Fatalf("key=%q want operator project", got)
 	}
-	// The managed workspace stays explicitly reachable.
 	if got := selectDefaultWorkspaceKey(catalog, "system-openmontage"); got != "u::d::system-openmontage" {
-		t.Fatalf("explicit selection of a managed workspace resolved to %q", got)
+		t.Fatalf("explicit configured system workspace resolved to %q", got)
 	}
 }
 
-func TestSelectDefaultWorkspaceKeyOnlySystemProjectsResolvesEmpty(t *testing.T) {
+func TestWorkspaceSelectionRequiredResultCarriesCandidates(t *testing.T) {
 	catalog := []gateway.WorkspaceView{
-		defaultWorkspaceFixture("u::d::system-openmontage", "system-openmontage", "active", 5000),
+		defaultWorkspaceFixture("u::d::alpha", "alpha", "active", 100),
+		defaultWorkspaceFixture("u::d::beta", "beta", "active", 200),
 	}
-	if got := selectDefaultWorkspaceKey(catalog, ""); got != "" {
-		t.Fatalf("key=%q want empty when only managed system projects exist", got)
+	result := workspaceSelectionRequiredResult(catalog)
+	structured, ok := result.StructuredContent.(map[string]any)
+	if !ok || structured["selectionRequired"] != true || structured["canSetDefault"] != true {
+		t.Fatalf("unexpected selection result: %#v", result.StructuredContent)
+	}
+	workspaces, ok := structured["workspaces"].([]any)
+	if !ok || len(workspaces) != 2 {
+		t.Fatalf("selection candidates=%#v", structured["workspaces"])
+	}
+	for _, raw := range workspaces {
+		if _, ok := raw.(map[string]any); !ok {
+			t.Fatalf("selection candidate has unexpected shape: %#v", raw)
+		}
 	}
 }

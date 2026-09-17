@@ -154,7 +154,9 @@ func TestPublicInstructionsExplainSessionlessWorkspaceRouting(t *testing.T) {
 	for _, required := range []string{
 		"workspace(action=list)",
 		"workspaceKey explicitly",
-		"never falls back to CodeLocal's own managed system projects",
+		"never chooses between multiple projects using recency/LastSeenAt",
+		"makeDefault=true",
+		"never implicitly routes to managed system projects",
 	} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("public instructions must explain workspace routing; missing %q", required)
@@ -162,7 +164,7 @@ func TestPublicInstructionsExplainSessionlessWorkspaceRouting(t *testing.T) {
 	}
 	// The pinned legacy instruction text must not drift: older clients verify a
 	// published contract hash over this exact string.
-	if strings.Contains(legacyPublicMCPInstructions(), "never falls back to CodeLocal's own managed system projects") {
+	if strings.Contains(legacyPublicMCPInstructions(), "makeDefault=true") {
 		t.Fatal("legacy instructions must stay byte-identical to the published generation")
 	}
 	if got := legacyPublicToolContractHash(); got != PinnedLegacyPublicToolContractHash {

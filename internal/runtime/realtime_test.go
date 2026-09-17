@@ -1,6 +1,13 @@
 package runtime
 
-import "testing"
+import (
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"syscall"
+	"testing"
+)
 
 func TestRuntimeControlURL(t *testing.T) {
 	cases := map[string]string{
@@ -12,5 +19,22 @@ func TestRuntimeControlURL(t *testing.T) {
 		if actual := runtimeControlURL(input); actual != expected {
 			t.Fatalf("runtimeControlURL(%q) = %q, want %q", input, actual, expected)
 		}
+	}
+}
+
+func TestIsGatewayNotReadyUsesTypedConnectionRefused(t *testing.T) {
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+	if !isGatewayNotReady(refused) {
+		t.Fatal("typed ECONNREFUSED must be treated as gateway-not-ready")
+	}
+	if !isGatewayNotReady(fmt.Errorf("wrapped dial failure: %w", refused)) {
+		t.Fatal("wrapped ECONNREFUSED must be detected through errors.Is")
+	}
+	if isGatewayNotReady(errors.New("connection refused")) {
+		t.Fatal("plain error text must not trigger gateway-not-ready retry policy")
+	}
+	unreachable := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.EHOSTUNREACH)}
+	if isGatewayNotReady(unreachable) {
+		t.Fatal("non-ECONNREFUSED network failures must keep exponential backoff")
 	}
 }

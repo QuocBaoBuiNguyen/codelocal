@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"strings"
+	"syscall"
 	"time"
 
 	"github.com/0xmarkhydra/codelocal/internal/cloud"
@@ -315,14 +315,8 @@ func (r *Runtime) serveRuntimeControl(parent context.Context, conn *websocket.Co
 	}
 }
 
-
 func isGatewayNotReady(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "connection refused") ||
-		strings.Contains(errStr, "connect: connection refused")
+	return err != nil && errors.Is(err, syscall.ECONNREFUSED)
 }
 
 func (r *Runtime) runRealtime(ctx context.Context) error {
