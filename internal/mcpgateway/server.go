@@ -367,27 +367,15 @@ func gatewayFailureResult(err error, runtimeCode, requestID, workspaceKey string
 	return codedErrorResult(code, err, retryable, details)
 }
 
-func activeWorkspaceKeyForOperation(active []gateway.WorkspaceView, operation operationInvocation) (string, bool) {
+func activeWorkspaceKeyForOperation(active []gateway.WorkspaceView, _ operationInvocation) (string, bool) {
 	if len(active) == 1 {
 		return active[0].Key, true
 	}
-	if len(active) < 2 || !strings.HasPrefix(operation.RuntimeTool, "computer_") {
-		return "", false
-	}
-	deviceID := strings.TrimSpace(active[0].DeviceID)
-	if deviceID == "" {
-		return "", false
-	}
-	best := active[0]
-	for _, workspace := range active[1:] {
-		if strings.TrimSpace(workspace.DeviceID) != deviceID {
-			return "", false
-		}
-		if workspace.LastSeenAt > best.LastSeenAt {
-			best = workspace
-		}
-	}
-	return best.Key, true
+	// Never choose between multiple workspaces by recency, even for
+	// device-oriented tools such as Computer Use. Workspace access mode and
+	// approvals are workspace-scoped, so two projects on the same device are
+	// still an authorization ambiguity that requires an explicit/default route.
+	return "", false
 }
 
 func attachWorkspaceHandle(result *mcp.CallToolResult, workspace *gateway.WorkspaceView) *mcp.CallToolResult {
