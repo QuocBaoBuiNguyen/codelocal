@@ -221,15 +221,14 @@ func TestTextResultWrapsTopLevelArrayStructuredContent(t *testing.T) {
 	}
 }
 
-func TestComputerCanInferOneActiveDeviceAcrossMultipleWorkspaces(t *testing.T) {
+func TestWorkspaceInferenceNeverChoosesBetweenMultipleActiveWorkspaces(t *testing.T) {
 	computer, _ := operationForRuntimeTool("computer_list_windows")
 	active := []gateway.WorkspaceView{
 		{Key: "workspace-a", DeviceID: "mac-1", LastSeenAt: 10},
 		{Key: "workspace-b", DeviceID: "mac-1", LastSeenAt: 20},
 	}
-	key, ok := activeWorkspaceKeyForOperation(active, computer)
-	if !ok || key != "workspace-b" {
-		t.Fatalf("computer route = (%q,%v), want most recent workspace on the single active device", key, ok)
+	if key, ok := activeWorkspaceKeyForOperation(active, computer); ok || key != "" {
+		t.Fatalf("computer route must not use recency across multiple workspaces: (%q,%v)", key, ok)
 	}
 
 	gitStatus, _ := operationForRuntimeTool("git_status")
@@ -237,9 +236,9 @@ func TestComputerCanInferOneActiveDeviceAcrossMultipleWorkspaces(t *testing.T) {
 		t.Fatalf("project-scoped route must remain explicit across multiple workspaces: (%q,%v)", key, ok)
 	}
 
-	active[1].DeviceID = "mac-2"
-	if key, ok := activeWorkspaceKeyForOperation(active, computer); ok || key != "" {
-		t.Fatalf("computer route must remain explicit across multiple devices: (%q,%v)", key, ok)
+	one := active[:1]
+	if key, ok := activeWorkspaceKeyForOperation(one, computer); !ok || key != "workspace-a" {
+		t.Fatalf("sole active workspace should be inferred: (%q,%v)", key, ok)
 	}
 }
 

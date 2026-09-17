@@ -233,6 +233,7 @@ func accountSchemaMigrations() []schemaMigration {
 	migrations = append(migrations, schemaMigration{69, aiProviderMigrationSQL})
 	migrations = append(migrations, forumEmailJobSchemaMigrations()...)
 	migrations = append(migrations, schemaMigration{71, aiProviderFormatsMigrationSQL})
+	migrations = append(migrations, schemaMigration{72, workspaceRoutingPreferenceMigrationSQL})
 	return migrations
 }
 

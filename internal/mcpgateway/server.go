@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -366,27 +367,15 @@ func gatewayFailureResult(err error, runtimeCode, requestID, workspaceKey string
 	return codedErrorResult(code, err, retryable, details)
 }
 
-func activeWorkspaceKeyForOperation(active []gateway.WorkspaceView, operation operationInvocation) (string, bool) {
+func activeWorkspaceKeyForOperation(active []gateway.WorkspaceView, _ operationInvocation) (string, bool) {
 	if len(active) == 1 {
 		return active[0].Key, true
 	}
-	if len(active) < 2 || !strings.HasPrefix(operation.RuntimeTool, "computer_") {
-		return "", false
-	}
-	deviceID := strings.TrimSpace(active[0].DeviceID)
-	if deviceID == "" {
-		return "", false
-	}
-	best := active[0]
-	for _, workspace := range active[1:] {
-		if strings.TrimSpace(workspace.DeviceID) != deviceID {
-			return "", false
-		}
-		if workspace.LastSeenAt > best.LastSeenAt {
-			best = workspace
-		}
-	}
-	return best.Key, true
+	// Never choose between multiple workspaces by recency, even for
+	// device-oriented tools such as Computer Use. Workspace access mode and
+	// approvals are workspace-scoped, so two projects on the same device are
+	// still an authorization ambiguity that requires an explicit/default route.
+	return "", false
 }
 
 func attachWorkspaceHandle(result *mcp.CallToolResult, workspace *gateway.WorkspaceView) *mcp.CallToolResult {
@@ -480,6 +469,9 @@ func (s *Service) callOperation(ctx context.Context, userID, publicTool string, 
 		key = s.route(userID, session)
 	}
 	if key == "" {
+		key = s.defaultWorkspaceKey(ctx, userID)
+	}
+	if key == "" {
 		catalog, catalogErr := s.Workspaces.Catalog(ctx, userID)
 		if catalogErr != nil {
 			return gatewayFailureResult(catalogErr, "", "", "", 0, false), nil
@@ -492,11 +484,17 @@ func (s *Service) callOperation(ctx context.Context, userID, publicTool string, 
 		}
 		if inferred, ok := activeWorkspaceKeyForOperation(active, operation); ok {
 			key = inferred
-		} else if len(active) == 0 {
-			err := workspaceRoutingError(false)
-			return gatewayFailureResult(err, "", "", "", 0, false), nil
 		} else {
-			err := workspaceRoutingError(true)
+			routable := 0
+			for _, workspace := range catalog {
+				if workspaceImplicitRoutable(workspace) {
+					routable++
+				}
+			}
+			if routable > 0 {
+				return workspaceSelectionRequiredResult(catalog), nil
+			}
+			err := workspaceRoutingError(false)
 			return gatewayFailureResult(err, "", "", "", 0, false), nil
 		}
 	}
@@ -570,6 +568,125 @@ func (s *Service) callOperation(ctx context.Context, userID, publicTool string, 
 	}
 	notice := s.claimUpdate(userID, session, workspace.Key, workspace.ClientVersion)
 	return attachWorkspaceHandle(toolResultWithNotice(result.Result, false, notice), workspace), nil
+}
+
+// configuredDefaultWorkspaceKey returns the user's durable default first and
+// keeps the environment variable only as an operator-level fallback for
+// self-hosted deployments. A stored key never bypasses workspace authorization;
+// it is validated against the current catalog before use.
+func (s *Service) configuredDefaultWorkspaceKey(ctx context.Context, userID string) string {
+	if s != nil && s.Store != nil {
+		preference, err := s.Store.WorkspaceRoutingPreference(ctx, userID)
+		if err == nil && strings.TrimSpace(preference.DefaultWorkspaceKey) != "" {
+			return strings.TrimSpace(preference.DefaultWorkspaceKey)
+		}
+		if err != nil {
+			slog.Debug("workspace routing preference lookup failed", "error", err)
+		}
+	}
+	return strings.TrimSpace(os.Getenv("CODELOCAL_DEFAULT_WORKSPACE_ID"))
+}
+
+// defaultWorkspaceKey resolves sessionless routing without guessing between
+// multiple operator projects. Resolution order is explicit/session selection
+// (handled by callers), then the user-saved default, then an unambiguous
+// implicit choice: exactly one active workspace, or exactly one sleeping
+// workspace when none is active. LastSeenAt is never used to choose between
+// multiple projects.
+func (s *Service) defaultWorkspaceKey(ctx context.Context, userID string) string {
+	if s == nil || s.Workspaces == nil {
+		return ""
+	}
+	catalog, err := s.Workspaces.Catalog(ctx, userID)
+	if err != nil {
+		return ""
+	}
+	return selectDefaultWorkspaceKey(catalog, s.configuredDefaultWorkspaceKey(ctx, userID))
+}
+
+func workspaceAuthorizedForRouting(workspace gateway.WorkspaceView) bool {
+	if authorized, ok := workspace.Authorized.(bool); ok && !authorized {
+		return false
+	}
+	return workspace.Status == "active" || workspace.Status == "sleeping"
+}
+
+func workspaceImplicitRoutable(workspace gateway.WorkspaceView) bool {
+	if !workspaceAuthorizedForRouting(workspace) {
+		return false
+	}
+	if workspace.System || workspace.SystemApp || workspace.Managed || strings.HasPrefix(strings.TrimSpace(workspace.WorkspaceID), "system-") {
+		return false
+	}
+	return true
+}
+
+func configuredWorkspaceKey(catalog []gateway.WorkspaceView, configured string) string {
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return ""
+	}
+	for _, workspace := range catalog {
+		if workspace.WorkspaceID != configured && workspace.Key != configured {
+			continue
+		}
+		if workspaceAuthorizedForRouting(workspace) {
+			return workspace.Key
+		}
+	}
+	return ""
+}
+
+// selectDefaultWorkspaceKey is intentionally conservative: a durable default
+// wins, otherwise CodeLocal auto-routes only when the user's intent is
+// unambiguous. Multiple active/sleeping projects require an explicit choice.
+func selectDefaultWorkspaceKey(catalog []gateway.WorkspaceView, configured string) string {
+	if key := configuredWorkspaceKey(catalog, configured); key != "" {
+		return key
+	}
+	active := make([]gateway.WorkspaceView, 0, len(catalog))
+	sleeping := make([]gateway.WorkspaceView, 0, len(catalog))
+	for _, workspace := range catalog {
+		if !workspaceImplicitRoutable(workspace) {
+			continue
+		}
+		if workspace.Status == "active" {
+			active = append(active, workspace)
+		} else if workspace.Status == "sleeping" {
+			sleeping = append(sleeping, workspace)
+		}
+	}
+	if len(active) == 1 {
+		return active[0].Key
+	}
+	if len(active) > 1 {
+		return ""
+	}
+	if len(sleeping) == 1 {
+		return sleeping[0].Key
+	}
+	return ""
+}
+
+func workspaceSelectionRequiredResult(catalog []gateway.WorkspaceView) *mcp.CallToolResult {
+	candidates := make([]map[string]any, 0, len(catalog))
+	for _, workspace := range catalog {
+		if !workspaceImplicitRoutable(workspace) {
+			continue
+		}
+		candidates = append(candidates, map[string]any{
+			"key": workspace.Key, "workspaceId": workspace.WorkspaceID, "workspaceName": workspace.WorkspaceName,
+			"projectId": workspace.ProjectID, "projectName": workspace.ProjectName, "deviceId": workspace.DeviceID,
+			"deviceName": workspace.DeviceName, "status": workspace.Status,
+		})
+	}
+	err := errors.New("multiple CodeLocal workspaces are available; ask the user which project to use instead of guessing")
+	return codedErrorResult(codeLocalWorkspaceNotSelected, err, false, map[string]any{
+		"selectionRequired": true,
+		"workspaces":        candidates,
+		"canSetDefault":     true,
+		"nextAction":        "Ask the user to choose a workspace. Use workspace(action=select,key=...) for this conversation, or makeDefault=true only when the user wants it remembered.",
+	})
 }
 
 func workspaceRoutingError(multiple bool) error {
@@ -664,20 +781,38 @@ func (s *Service) callLocal(ctx context.Context, userID, session, tool string, a
 			return errorResult(err), nil
 		}
 		notice := s.firstUpdateNotice(userID, session, catalog)
-		return textResultWithNotice(map[string]any{"selectedWorkspace": s.route(userID, session), "workspaces": catalog}, false, notice), nil
+		configured := configuredWorkspaceKey(catalog, s.configuredDefaultWorkspaceKey(ctx, userID))
+		return textResultWithNotice(map[string]any{"selectedWorkspace": s.route(userID, session), "defaultWorkspace": configured, "workspaces": catalog}, false, notice), nil
 	case "select_workspace":
 		key, _ := args["key"].(string)
 		workspace, err := s.Workspaces.Activate(ctx, userID, key)
 		if err != nil {
 			return gatewayFailureResult(err, "", "", key, 0, false), nil
 		}
+		makeDefault, _ := args["makeDefault"].(bool)
+		if makeDefault {
+			if s.Store == nil {
+				return errorResult(errors.New("workspace default store unavailable")), nil
+			}
+			if err := s.Store.SetDefaultWorkspaceKey(ctx, userID, workspace.Key); err != nil {
+				return errorResult(err), nil
+			}
+		}
 		s.setRoute(userID, session, key)
 		notice := s.claimUpdate(userID, session, workspace.Key, workspace.ClientVersion)
-		return textResultWithNotice(map[string]any{"selected": key, "workspaceKey": key, "deviceId": workspace.DeviceID, "workspaceId": workspace.WorkspaceID, "workspaceName": workspace.WorkspaceName, "clientVersion": workspace.ClientVersion, "status": "active"}, false, notice), nil
+		payload := map[string]any{"selected": key, "workspaceKey": key, "deviceId": workspace.DeviceID, "workspaceId": workspace.WorkspaceID, "workspaceName": workspace.WorkspaceName, "clientVersion": workspace.ClientVersion, "status": "active"}
+		if makeDefault {
+			payload["defaultWorkspace"] = workspace.Key
+			payload["defaultSaved"] = true
+		}
+		return textResultWithNotice(payload, false, notice), nil
 	case "workspace_info":
 		key, _ := args["workspaceKey"].(string)
 		if strings.TrimSpace(key) == "" {
 			key = s.route(userID, session)
+		}
+		if strings.TrimSpace(key) == "" {
+			key = s.defaultWorkspaceKey(ctx, userID)
 		}
 		if key == "" {
 			err := errors.New("no workspace selected")

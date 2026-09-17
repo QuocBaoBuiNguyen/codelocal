@@ -213,8 +213,19 @@ func toolSurfaceSummary() string {
 	return fmt.Sprintf("CodeLocal tool surface v%d (%d tools, sha256:%s)", surface.Version, surface.Count, surface.Hash)
 }
 
+// sessionlessWorkspaceRoutingInstructions explains the default-workspace rule
+// to the model.
+//
+// A cacheable/sessionless host such as ChatGPT web cannot carry a workspace
+// route between calls, so without this the model either guesses a workspaceKey
+// (and fails) or asks the user a question it could have answered itself. The
+// rule is appended only to the current generation's instructions: the pinned
+// legacy instruction text stays byte-identical so published contract hashes for
+// older generations do not drift.
+const sessionlessWorkspaceRoutingInstructions = `Workspace routing: when the project is known, pass workspaceKey explicitly; explicit workspaceKey always wins, followed by the current stateful session selection. If neither exists, CodeLocal may use a user-saved default workspace; otherwise it auto-selects only when intent is unambiguous (exactly one active operator workspace, or one sleeping workspace when none is active). CodeLocal never chooses between multiple projects using recency/LastSeenAt and never implicitly routes to managed system projects. When selectionRequired is returned, call workspace(action=list) to inspect candidates and ask the user which workspace to use. Call workspace(action=select,key=...) for the current conversation; set makeDefault=true only when the user explicitly wants that choice remembered across future sessions. Workspace routing never changes the workspace access/approval mode.`
+
 func publicMCPInstructions() string {
-	return compactOrchestrationInstructions + "\n\nCompatibility: " + toolSurfaceSummary() + ". Legacy tool calls that CodeLocal can translate remain supported without user action. Only CODELOCAL_TOOL_SCHEMA_MISMATCH means the client requested a contract CodeLocal cannot translate."
+	return compactOrchestrationInstructions + "\n\n" + sessionlessWorkspaceRoutingInstructions + "\n\nCompatibility: " + toolSurfaceSummary() + ". Legacy tool calls that CodeLocal can translate remain supported without user action. Only CODELOCAL_TOOL_SCHEMA_MISMATCH means the client requested a contract CodeLocal cannot translate."
 }
 
 func staleToolSchemaNotice(originalTool string) string {
