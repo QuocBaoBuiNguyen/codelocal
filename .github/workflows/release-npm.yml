@@ -507,15 +507,19 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 12); do
+          max_attempts=60
+          for attempt in $(seq 1 "$max_attempts"); do
             published="$(npm view "codelocal@$VERSION" version --prefer-online 2>/dev/null || true)"
             latest="$(npm view 'codelocal@latest' version --prefer-online 2>/dev/null || true)"
-            if [[ "$published" == "$VERSION" ]]; then
-              echo "Published codelocal@$VERSION is visible in the npm registry (latest=${latest:-pending})."
+            if [[ "$published" == "$VERSION" && "$latest" == "$VERSION" ]]; then
+              echo "Published codelocal@$VERSION is visible and npm latest points to $VERSION."
               exit 0
             fi
-            echo "Registry propagation $attempt/12: version=${published:-pending}, latest=${latest:-pending}"
+            echo "Registry propagation $attempt/$max_attempts: version=${published:-pending}, latest=${latest:-pending}"
             sleep 5
           done
 
-          echo "::warning::npm publish returned success, but registry read-after-write has not propagated codelocal@$VERSION yet. Notification will continue because npm publish itself is the authoritative release step."
+          published="$(npm view "codelocal@$VERSION" version --prefer-online 2>/dev/null || true)"
+          latest="$(npm view 'codelocal@latest' version --prefer-online 2>/dev/null || true)"
+          echo "::error::npm publish returned success, but registry propagation did not converge within 5 minutes: expected=$VERSION version=${published:-pending} latest=${latest:-pending}."
+          exit 1
