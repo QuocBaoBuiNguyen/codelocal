@@ -231,6 +231,7 @@ func accountSchemaMigrations() []schemaMigration {
 	}
 	migrations = append(migrations, skillIntelligenceSchemaMigrations()...)
 	migrations = append(migrations, schemaMigration{69, aiProviderMigrationSQL})
+	migrations = append(migrations, forumEmailJobSchemaMigrations()...)
 	return migrations
 }
 

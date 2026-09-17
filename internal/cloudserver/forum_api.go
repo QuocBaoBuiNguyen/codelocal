@@ -103,6 +103,7 @@ func (s *Server) forumTopicsAPI(w http.ResponseWriter, r *http.Request) {
 		writeForumAPIError(w, err)
 		return
 	}
+	s.queueForumTopicCreatedEmails(r.Context(), topic, identity.User.Email)
 	webutil.JSON(w, http.StatusCreated, map[string]any{"topic": toForumTopicResponse(topic, cloud.IsAdminEmail(identity.User.Email))})
 }
 
@@ -150,6 +151,7 @@ func (s *Server) forumCommentAPI(w http.ResponseWriter, r *http.Request) {
 		writeForumAPIError(w, err)
 		return
 	}
+	s.queueForumCommentCreatedEmailsForComment(r.Context(), comment)
 	webutil.JSON(w, http.StatusCreated, map[string]any{"comment": toForumCommentResponse(comment, cloud.IsAdminEmail(identity.User.Email))})
 }
 
@@ -180,6 +182,11 @@ func (s *Server) adminForumTopicAPI(w http.ResponseWriter, r *http.Request) {
 		webutil.JSON(w, http.StatusBadRequest, map[string]string{"error": "invalid_request"})
 		return
 	}
+	previousTopic, err := s.Store.ForumTopicByID(r.Context(), r.PathValue("topicID"))
+	if err != nil {
+		writeForumAPIError(w, err)
+		return
+	}
 	topic, err := s.Store.AdminUpdateForumTopic(r.Context(), r.PathValue("topicID"), cloud.ForumAdminUpdate{
 		Status: input.Status, Severity: input.Severity, GitHubIssueURL: input.GitHubIssueURL,
 		GitHubIssueNumber: input.GitHubIssueNumber, GitHubPRURL: input.GitHubPRURL, ResolutionNote: input.ResolutionNote,
@@ -188,6 +195,7 @@ func (s *Server) adminForumTopicAPI(w http.ResponseWriter, r *http.Request) {
 		writeForumAPIError(w, err)
 		return
 	}
+	s.queueForumStatusChangedEmail(r.Context(), previousTopic, topic, identity.User.ID)
 	webutil.JSON(w, http.StatusOK, map[string]any{"topic": toForumTopicResponse(topic, true)})
 }
 

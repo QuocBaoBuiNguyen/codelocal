@@ -82,3 +82,32 @@ ALTER TABLE codelocal_forum_comments
 func forumModerationSchemaMigrations() []schemaMigration {
 	return []schemaMigration{{68, forumModerationMigrationSQL}}
 }
+
+const forumEmailJobMigrationSQL = `
+CREATE TABLE IF NOT EXISTS codelocal_forum_email_jobs (
+  job_id TEXT PRIMARY KEY,
+  dedupe_key TEXT NOT NULL UNIQUE,
+  event_type TEXT NOT NULL,
+  topic_id TEXT NOT NULL DEFAULT '',
+  comment_id TEXT NOT NULL DEFAULT '',
+  recipient_email TEXT NOT NULL,
+  audience TEXT NOT NULL CHECK (audience IN ('admin','topic_owner')),
+  subject TEXT NOT NULL,
+  text_body TEXT NOT NULL,
+  html_body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sending','sent','failed')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at BIGINT NOT NULL,
+  last_error TEXT NOT NULL DEFAULT '',
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  sent_at BIGINT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_codelocal_forum_email_jobs_pending
+ ON codelocal_forum_email_jobs(next_attempt_at, created_at)
+ WHERE status IN ('pending','sending');
+`
+
+func forumEmailJobSchemaMigrations() []schemaMigration {
+	return []schemaMigration{{70, forumEmailJobMigrationSQL}}
+}

@@ -220,6 +220,7 @@ func New(ctx context.Context) (*Server, error) {
 		MaxHeaderBytes:    1 << 20,
 	}
 	go hub.HeartbeatLoop(ctx, 20*time.Second, 70*time.Second)
+	go s.forumEmailWorker(ctx)
 	if mediaStore != nil {
 		go mediaStore.cleanupLoop(ctx)
 	}
