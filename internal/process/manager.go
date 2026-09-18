@@ -34,6 +34,19 @@ type streamBuffer struct {
 	TotalBytes int64
 }
 
+type processStreamWriter struct {
+	manager *Manager
+	record  *Record
+	stream  string
+}
+
+func (w processStreamWriter) Write(data []byte) (int, error) {
+	if len(data) > 0 {
+		w.manager.append(w.record, w.stream, string(data))
+	}
+	return len(data), nil
+}
+
 type Record struct {
 	ProcessID      string
 	WorkspaceKey   string
@@ -302,14 +315,13 @@ func (m *Manager) Start(command string, options StartOptions) (Snapshot, error) 
 			return m.Snapshot(record.ProcessID, nil, nil)
 		}
 	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return Snapshot{}, m.failStart(record, err)
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return Snapshot{}, m.failStart(record, err)
-	}
+	// Let os/exec own the stdout/stderr copy goroutines. Wait then becomes the
+	// completion barrier for both the process and captured output. Calling
+	// Cmd.Wait concurrently with readers returned by StdoutPipe/StderrPipe can
+	// close those pipes before a short-lived child has been fully drained,
+	// which showed up as intermittent empty stdout on Linux CI.
+	cmd.Stdout = processStreamWriter{manager: m, record: record, stream: "stdout"}
+	cmd.Stderr = processStreamWriter{manager: m, record: record, stream: "stderr"}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return Snapshot{}, m.failStart(record, err)
@@ -318,17 +330,7 @@ func (m *Manager) Start(command string, options StartOptions) (Snapshot, error) 
 		return Snapshot{}, m.failStart(record, err)
 	}
 	record.cmd, record.stdin, record.PID = cmd, stdin, cmd.Process.Pid
-	stdoutDone := make(chan struct{})
-	stderrDone := make(chan struct{})
-	go func() {
-		defer close(stdoutDone)
-		m.copyStream(record, "stdout", stdout)
-	}()
-	go func() {
-		defer close(stderrDone)
-		m.copyStream(record, "stderr", stderr)
-	}()
-	go m.wait(record, ctx, cmd, stdoutDone, stderrDone)
+	go m.wait(record, ctx, cmd)
 	return m.Snapshot(record.ProcessID, nil, nil)
 }
 
@@ -369,7 +371,7 @@ func (m *Manager) copyPTY(record *Record, handle ptyHandle) {
 	}
 }
 
-func (m *Manager) wait(record *Record, ctx context.Context, cmd *exec.Cmd, outputDone ...<-chan struct{}) {
+func (m *Manager) wait(record *Record, ctx context.Context, cmd *exec.Cmd) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	var err error
@@ -384,15 +386,9 @@ func (m *Manager) wait(record *Record, ctx context.Context, cmd *exec.Cmd, outpu
 		_ = terminateProcess(cmd)
 		err = <-done
 	}
-	// StdoutPipe and StderrPipe are drained by our own goroutines. cmd.Wait may
-	// return before those goroutines have appended their final bytes, especially
-	// on slower CI runners. Do not expose a settled snapshot until captured
-	// output is complete; callers treat Running=false as the completion barrier.
-	for _, drained := range outputDone {
-		if drained != nil {
-			<-drained
-		}
-	}
+	// cmd.Wait also waits for os/exec's stdout/stderr copy goroutines because
+	// Start wires non-*os.File writers above. Running=false is therefore a
+	// reliable completion barrier for captured process output.
 	m.mu.Lock()
 	if record.Status == StatusRunning {
 		if err != nil && !isExitError(err) {
