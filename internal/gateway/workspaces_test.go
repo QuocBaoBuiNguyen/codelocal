@@ -31,8 +31,16 @@ func TestActivateUsesConnectedLocalWorkspaceFastPath(t *testing.T) {
 			ApprovalMemory:       true,
 			TerminalChatApproval: true,
 			Automation: protocol.AutomationCapabilities{
-				Browser:  protocol.BrowserCapabilities{Available: true, IsolatedProfile: true, Screenshots: true},
-				Computer: protocol.ComputerCapabilities{Available: true, Backend: "test", WindowList: true, Pointer: true},
+				Browser: protocol.BrowserCapabilities{Available: true, IsolatedProfile: true, Screenshots: true},
+				Computer: protocol.ComputerCapabilities{
+					Available: true, DesktopAvailable: true, Backend: "test", WindowList: true, Pointer: true,
+					Mobile: &protocol.MobileCapabilities{
+						Available: true, Backend: "mobile-mcp", Version: "1.0.2", Managed: true,
+						IOS: true, Android: true, DeviceList: true, ScreenCapture: true, UITree: true,
+						Pointer: true, Keyboard: true, AppLifecycle: true, OpenURL: true,
+						Orientation: true, Recording: true, CrashReports: true,
+					},
+				},
 			},
 		},
 		closed: make(chan struct{}),
@@ -57,7 +65,11 @@ func TestActivateUsesConnectedLocalWorkspaceFastPath(t *testing.T) {
 	automation, _ := workspace.Capabilities["automation"].(map[string]any)
 	browser, _ := automation["browser"].(map[string]any)
 	computer, _ := automation["computer"].(map[string]any)
-	if browser["available"] != true || computer["backend"] != "test" || computer["pointer"] != true {
+	mobile, _ := computer["mobile"].(map[string]any)
+	if browser["available"] != true || computer["backend"] != "test" || computer["desktopAvailable"] != true || computer["pointer"] != true {
 		t.Fatalf("automation capabilities were not preserved: %#v", automation)
+	}
+	if mobile["available"] != true || mobile["backend"] != "mobile-mcp" || mobile["deviceList"] != true || mobile["appLifecycle"] != true {
+		t.Fatalf("mobile automation capabilities were not preserved: %#v", mobile)
 	}
 }

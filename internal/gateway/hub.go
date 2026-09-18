@@ -142,6 +142,46 @@ func (h *Hub) LocalClientCount() int {
 func (c *Client) LastSeenAt() int64 { return c.lastSeenAt.Load() }
 
 func automationCapabilityMap(capabilities protocol.AutomationCapabilities) map[string]any {
+	computer := map[string]any{
+		"available":              capabilities.Computer.Available,
+		"desktopAvailable":       capabilities.Computer.DesktopAvailable,
+		"backend":                capabilities.Computer.Backend,
+		"engine":                 capabilities.Computer.Engine,
+		"persistentEngine":       capabilities.Computer.PersistentEngine,
+		"sceneCache":             capabilities.Computer.SceneCache,
+		"batchActions":           capabilities.Computer.BatchActions,
+		"windowList":             capabilities.Computer.WindowList,
+		"screenCapture":          capabilities.Computer.ScreenCapture,
+		"screenCaptureStreaming": capabilities.Computer.ScreenCaptureStreaming,
+		"uiTree":                 capabilities.Computer.UITree,
+		"semanticActions":        capabilities.Computer.SemanticActions,
+		"physicalInputFallback":  capabilities.Computer.PhysicalInputFallback,
+		"pointer":                capabilities.Computer.Pointer,
+		"keyboard":               capabilities.Computer.Keyboard,
+		"clipboard":              capabilities.Computer.Clipboard,
+		"backgroundControl":      capabilities.Computer.BackgroundControl,
+		"secureDesktop":          false,
+	}
+	if mobile := capabilities.Computer.Mobile; mobile != nil {
+		computer["mobile"] = map[string]any{
+			"available":     mobile.Available,
+			"backend":       mobile.Backend,
+			"version":       mobile.Version,
+			"managed":       mobile.Managed,
+			"ios":           mobile.IOS,
+			"android":       mobile.Android,
+			"deviceList":    mobile.DeviceList,
+			"screenCapture": mobile.ScreenCapture,
+			"uiTree":        mobile.UITree,
+			"pointer":       mobile.Pointer,
+			"keyboard":      mobile.Keyboard,
+			"appLifecycle":  mobile.AppLifecycle,
+			"openURL":       mobile.OpenURL,
+			"orientation":   mobile.Orientation,
+			"recording":     mobile.Recording,
+			"crashReports":  mobile.CrashReports,
+		}
+	}
 	return map[string]any{
 		"browser": map[string]any{
 			"available":       capabilities.Browser.Available,
@@ -150,25 +190,7 @@ func automationCapabilityMap(capabilities protocol.AutomationCapabilities) map[s
 			"devtools":        capabilities.Browser.Devtools,
 			"attachExisting":  capabilities.Browser.AttachExisting,
 		},
-		"computer": map[string]any{
-			"available":              capabilities.Computer.Available,
-			"backend":                capabilities.Computer.Backend,
-			"engine":                 capabilities.Computer.Engine,
-			"persistentEngine":       capabilities.Computer.PersistentEngine,
-			"sceneCache":             capabilities.Computer.SceneCache,
-			"batchActions":           capabilities.Computer.BatchActions,
-			"windowList":             capabilities.Computer.WindowList,
-			"screenCapture":          capabilities.Computer.ScreenCapture,
-			"screenCaptureStreaming": capabilities.Computer.ScreenCaptureStreaming,
-			"uiTree":                 capabilities.Computer.UITree,
-			"semanticActions":        capabilities.Computer.SemanticActions,
-			"physicalInputFallback":  capabilities.Computer.PhysicalInputFallback,
-			"pointer":                capabilities.Computer.Pointer,
-			"keyboard":               capabilities.Computer.Keyboard,
-			"clipboard":              capabilities.Computer.Clipboard,
-			"backgroundControl":      capabilities.Computer.BackgroundControl,
-			"secureDesktop":          false,
-		},
+		"computer": computer,
 	}
 }
 
