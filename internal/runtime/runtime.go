@@ -87,7 +87,12 @@ type pollResponse struct {
 	Now        int64                      `json:"now"`
 }
 
-var ErrDeviceAuthorizationRevoked = errors.New("CodeLocal runtime device authorization was revoked; run `codelocal login` to sign in again")
+var (
+	ErrDeviceAuthorizationRevoked = errors.New("CodeLocal runtime device authorization was revoked; run `codelocal login` to sign in again")
+	ErrDeviceClockSkew            = errors.New("CodeLocal device clock is out of sync; sync the system date/time and retry (the existing pairing was kept)")
+	ErrDeviceProofRejected        = errors.New("CodeLocal device proof was rejected while the credential is still active; run `codelocal login --force` only if the system clock is correct")
+	ErrDeviceIdentityMismatch     = errors.New("CodeLocal device identity does not match the paired credential; run `codelocal login --force` on this machine")
+)
 
 type WorkspaceActivationError struct {
 	Phase string
@@ -154,6 +159,67 @@ func (r *Runtime) headers(req *http.Request) {
 	req.Header.Set("X-CodeLocal-Credential-Id", r.Options.Credential.CredentialID)
 	req.Header.Set("Authorization", "Device "+r.Options.Credential.CredentialSecret)
 }
+
+func clockOutsideDeviceWindow(serverTime, localTime time.Time) bool {
+	if serverTime.IsZero() {
+		return false
+	}
+	delta := serverTime.Sub(localTime)
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta > deviceauth.MaxClockSkew
+}
+
+func responseServerTime(resp *http.Response) time.Time {
+	if resp == nil {
+		return time.Time{}
+	}
+	value := strings.TrimSpace(resp.Header.Get("Date"))
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := http.ParseTime(value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
+}
+
+func (r *Runtime) confirmCredentialStatus(ctx context.Context) error {
+	raw := []byte("{}")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, normalizeBase(r.Options.BaseURL)+"/api/client/auth/check", bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("unable to confirm CodeLocal credential status: %w", err)
+	}
+	r.headers(req)
+	// Sign when possible for backward compatibility with older gateways. New
+	// gateways intentionally use this endpoint only for credential liveness.
+	_ = deviceauth.SignRequest(req, raw, r.Options.Credential.DevicePrivateKey, time.Now())
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("unable to confirm CodeLocal credential status; local credential was kept: %w", err)
+	}
+	defer resp.Body.Close()
+	if clockOutsideDeviceWindow(responseServerTime(resp), time.Now()) {
+		return ErrDeviceClockSkew
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		var result struct {
+			Now int64 `json:"now"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&result)
+		if result.Now > 0 && clockOutsideDeviceWindow(time.UnixMilli(result.Now), time.Now()) {
+			return ErrDeviceClockSkew
+		}
+		return ErrDeviceProofRejected
+	}
+	if resp.StatusCode == http.StatusUnauthorized && strings.TrimSpace(resp.Header.Get("X-CodeLocal-Auth-Check")) == "credential-v1" {
+		return ErrDeviceAuthorizationRevoked
+	}
+	return fmt.Errorf("CodeLocal credential status is ambiguous (%d); local credential was kept to avoid an unsafe re-pair", resp.StatusCode)
+}
+
 func (r *Runtime) post(ctx context.Context, path string, input any, output any) error {
 	raw, err := json.Marshal(input)
 	if err != nil {
@@ -165,15 +231,29 @@ func (r *Runtime) post(ctx context.Context, path string, input any, output any) 
 	}
 	r.headers(req)
 	if err := deviceauth.SignRequest(req, raw, r.Options.Credential.DevicePrivateKey, time.Now()); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrDeviceProofRejected, err)
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return ErrDeviceAuthorizationRevoked
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return r.confirmCredentialStatus(ctx)
+	}
+	if resp.StatusCode == http.StatusConflict {
+		var failure struct {
+			Error  string `json:"error"`
+			Reason string `json:"reason"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&failure)
+		switch strings.TrimSpace(failure.Reason) {
+		case "DEVICE_CLOCK_SKEW":
+			return ErrDeviceClockSkew
+		case "DEVICE_SIGNATURE_INVALID":
+			return ErrDeviceProofRejected
+		}
+		return fmt.Errorf("CodeLocal Cloud %s failed (%d)", path, resp.StatusCode)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("CodeLocal Cloud %s failed (%d)", path, resp.StatusCode)

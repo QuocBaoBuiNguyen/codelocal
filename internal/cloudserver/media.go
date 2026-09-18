@@ -346,8 +346,7 @@ func (m *s3MediaStore) cleanupLoop(ctx context.Context) {
 
 func (s *Server) mediaPresign(w http.ResponseWriter, r *http.Request) {
 	device, err := s.authenticateDevice(r)
-	if err != nil || device == nil {
-		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "device_auth_failed"})
+	if s.writeDeviceAuthFailure(w, device, err) {
 		return
 	}
 	if s.Media == nil {

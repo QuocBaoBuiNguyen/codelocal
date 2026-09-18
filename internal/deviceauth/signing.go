@@ -23,6 +23,11 @@ const (
 	maxSignedBody   = 20 << 20
 )
 
+// ErrClockSkew identifies a validly structured device-proof request whose
+// timestamp falls outside the replay-protection window. Callers must not
+// classify this as a revoked device credential.
+var ErrClockSkew = errors.New("device signature timestamp outside allowed skew")
+
 func GenerateKeyPair() (publicKey, privateKey string, err error) {
 	publicRaw, privateRaw, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -117,7 +122,7 @@ func VerifyRequest(req *http.Request, publicKey string, now time.Time) error {
 	}
 	at := time.Unix(timestamp, 0)
 	if at.Before(now.Add(-MaxClockSkew)) || at.After(now.Add(MaxClockSkew)) {
-		return errors.New("device signature timestamp outside allowed skew")
+		return ErrClockSkew
 	}
 	nonce := RequestNonce(req)
 	nonceRaw, err := base64.RawURLEncoding.DecodeString(nonce)

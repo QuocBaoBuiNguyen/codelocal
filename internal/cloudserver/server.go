@@ -679,15 +679,23 @@ func (s *Server) authenticateDevice(r *http.Request) (*cloud.Device, error) {
 		return device, err
 	}
 	if err := s.verifySignedDeviceRequest(r, device); err != nil {
-		return nil, err
+		return device, &deviceProofError{err: err}
 	}
 	return device, nil
 }
 
+const credentialCheckSemantics = "credential-v1"
+
 func (s *Server) clientAuthCheck(w http.ResponseWriter, r *http.Request) {
-	device, err := s.authenticateDevice(r)
+	w.Header().Set("X-CodeLocal-Auth-Check", credentialCheckSemantics)
+	id, secret := deviceAuth(r)
+	if id == "" || secret == "" {
+		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "credential_invalid"})
+		return
+	}
+	device, err := s.Store.AuthenticateDevice(r.Context(), id, cloud.HashSecret(secret))
 	if err != nil || device == nil {
-		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "device_auth_failed"})
+		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "credential_invalid"})
 		return
 	}
 	output := map[string]any{"ok": true, "deviceId": device.DeviceID, "now": time.Now().UnixMilli()}
@@ -699,8 +707,7 @@ func (s *Server) clientAuthCheck(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) clientAuthLogout(w http.ResponseWriter, r *http.Request) {
 	device, err := s.authenticateDevice(r)
-	if err != nil || device == nil {
-		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "device_auth_failed"})
+	if s.writeDeviceAuthFailure(w, device, err) {
 		return
 	}
 	credentialID, _ := deviceAuth(r)
@@ -719,8 +726,7 @@ func (s *Server) clientAuthLogout(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) knowledgeSync(w http.ResponseWriter, r *http.Request) {
 	device, err := s.authenticateDevice(r)
-	if err != nil || device == nil {
-		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "device_auth_failed"})
+	if s.writeDeviceAuthFailure(w, device, err) {
 		return
 	}
 	if !projectBrainCloudSyncEnabled(device.UserID, device.DeviceID) {
@@ -758,8 +764,7 @@ func (s *Server) knowledgeSync(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) workspaceSync(w http.ResponseWriter, r *http.Request) {
 	device, err := s.authenticateDevice(r)
-	if err != nil || device == nil {
-		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "device_auth_failed"})
+	if s.writeDeviceAuthFailure(w, device, err) {
 		return
 	}
 	brainEnabled := projectBrainCloudSyncEnabled(device.UserID, device.DeviceID)
@@ -908,8 +913,7 @@ func truncate(value string, n int) string {
 
 func (s *Server) runtimePoll(w http.ResponseWriter, r *http.Request) {
 	device, err := s.authenticateDevice(r)
-	if err != nil || device == nil {
-		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "device_auth_failed"})
+	if s.writeDeviceAuthFailure(w, device, err) {
 		return
 	}
 	var input struct {
@@ -952,8 +956,7 @@ func (s *Server) runtimePoll(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) revocationAck(w http.ResponseWriter, r *http.Request) {
 	device, err := s.authenticateDevice(r)
-	if err != nil || device == nil {
-		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "device_auth_failed"})
+	if s.writeDeviceAuthFailure(w, device, err) {
 		return
 	}
 	var input struct {

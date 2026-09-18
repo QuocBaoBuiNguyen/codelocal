@@ -75,14 +75,49 @@ func writeRuntimeControl(parent context.Context, conn *websocket.Conn, value any
 	return conn.Write(ctx, websocket.MessageText, raw)
 }
 
+func runtimeControlStatusError(status websocket.StatusCode) error {
+	switch status {
+	case websocket.StatusCode(4403):
+		return ErrDeviceAuthorizationRevoked
+	case websocket.StatusCode(4402):
+		return ErrDeviceProofRejected
+	case websocket.StatusCode(4408):
+		return ErrDeviceClockSkew
+	case websocket.StatusCode(4409):
+		return ErrDeviceIdentityMismatch
+	default:
+		return nil
+	}
+}
+
 func runtimeControlError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if websocket.CloseStatus(err) == websocket.StatusCode(4403) {
-		return ErrDeviceAuthorizationRevoked
+	var closeErr websocket.CloseError
+	if errors.As(err, &closeErr) {
+		// Older gateways reused 4403 for several device-auth failures but still
+		// sent a precise reason. Prefer that reason before interpreting the code.
+		switch closeErr.Reason {
+		case "DEVICE_SIGNATURE_INVALID":
+			return ErrDeviceProofRejected
+		case "DEVICE_CLOCK_SKEW":
+			return ErrDeviceClockSkew
+		case "DEVICE_ID_MISMATCH":
+			return ErrDeviceIdentityMismatch
+		}
+	}
+	if mapped := runtimeControlStatusError(websocket.CloseStatus(err)); mapped != nil {
+		return mapped
 	}
 	return err
+}
+
+func terminalDeviceAuthError(err error) bool {
+	return errors.Is(err, ErrDeviceAuthorizationRevoked) ||
+		errors.Is(err, ErrDeviceClockSkew) ||
+		errors.Is(err, ErrDeviceProofRejected) ||
+		errors.Is(err, ErrDeviceIdentityMismatch)
 }
 
 func workspaceActivationReason(err error) string {
@@ -160,7 +195,7 @@ func (r *Runtime) handleRuntimeRevocation(ctx context.Context, conn *websocket.C
 	}
 	if removed {
 		items, syncErr := r.SyncRegistry(ctx, true)
-		if errors.Is(syncErr, ErrDeviceAuthorizationRevoked) {
+		if terminalDeviceAuthError(syncErr) {
 			return syncErr
 		}
 		if syncErr != nil {
@@ -236,7 +271,7 @@ func (r *Runtime) serveRuntimeControl(parent context.Context, conn *websocket.Co
 			return err
 		case <-registryTicker.C:
 			items, err := r.SyncRegistry(ctx, false)
-			if errors.Is(err, ErrDeviceAuthorizationRevoked) {
+			if terminalDeviceAuthError(err) {
 				return err
 			}
 			if err != nil {
@@ -341,7 +376,7 @@ func (r *Runtime) runRealtime(ctx context.Context) error {
 		}
 
 		items, syncErr := r.SyncRegistry(ctx, false)
-		if errors.Is(syncErr, ErrDeviceAuthorizationRevoked) {
+		if terminalDeviceAuthError(syncErr) {
 			return syncErr
 		}
 		if syncErr != nil {
@@ -355,7 +390,7 @@ func (r *Runtime) runRealtime(ctx context.Context) error {
 			warned = false
 			dialErr = r.serveRuntimeControl(ctx, conn, items)
 		}
-		if errors.Is(dialErr, ErrDeviceAuthorizationRevoked) {
+		if terminalDeviceAuthError(dialErr) {
 			return dialErr
 		}
 		if ctx.Err() != nil {

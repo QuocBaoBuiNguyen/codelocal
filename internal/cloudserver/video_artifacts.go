@@ -134,8 +134,7 @@ func (s *Server) prepareVideoArtifact(ctx context.Context, userID string, input 
 
 func (s *Server) videoArtifactPresign(w http.ResponseWriter, r *http.Request) {
 	device, err := s.authenticateDevice(r)
-	if err != nil || device == nil {
-		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "device_auth_failed"})
+	if s.writeDeviceAuthFailure(w, device, err) {
 		return
 	}
 	if s.Media == nil {

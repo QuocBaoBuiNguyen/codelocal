@@ -104,8 +104,11 @@ func TestTerminalTraceColorHonorsNoColor(t *testing.T) {
 	}
 }
 
-func TestPostReturnsDeviceAuthorizationRevokedSentinel(t *testing.T) {
+func TestPostReturnsDeviceAuthorizationRevokedOnlyAfterConfirmedCredentialCheck(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/client/auth/check" {
+			w.Header().Set("X-CodeLocal-Auth-Check", "credential-v1")
+		}
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 	defer server.Close()
@@ -120,6 +123,37 @@ func TestPostReturnsDeviceAuthorizationRevokedSentinel(t *testing.T) {
 	err := runtime.post(context.Background(), "/api/client/runtime/poll", map[string]any{}, nil)
 	if !errors.Is(err, ErrDeviceAuthorizationRevoked) {
 		t.Fatalf("expected ErrDeviceAuthorizationRevoked, got %v", err)
+	}
+}
+
+func TestPostKeepsCredentialWhenLegacyGatewayAuthResultIsAmbiguous(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	runtime := New(Options{BaseURL: server.URL, Credential: identity.Credential{CredentialID: "cld_test", CredentialSecret: "secret"}})
+	err := runtime.post(context.Background(), "/api/client/runtime/poll", map[string]any{}, nil)
+	if err == nil {
+		t.Fatal("expected ambiguous legacy auth error")
+	}
+	if errors.Is(err, ErrDeviceAuthorizationRevoked) {
+		t.Fatalf("legacy ambiguous auth must not revoke local credential: %v", err)
+	}
+}
+
+func TestPostClassifiesDeviceProofConflict(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"device_proof_failed","reason":"DEVICE_CLOCK_SKEW"}`))
+	}))
+	defer server.Close()
+
+	runtime := New(Options{BaseURL: server.URL, Credential: identity.Credential{CredentialID: "cld_test", CredentialSecret: "secret"}})
+	err := runtime.post(context.Background(), "/api/client/runtime/poll", map[string]any{}, nil)
+	if !errors.Is(err, ErrDeviceClockSkew) {
+		t.Fatalf("expected ErrDeviceClockSkew, got %v", err)
 	}
 }
 

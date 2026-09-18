@@ -1,6 +1,7 @@
 package deviceauth
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -49,8 +50,8 @@ func TestSignedRequestRejectsTamperingAndClockSkew(t *testing.T) {
 	if err := SignRequest(req, body, privateKey, now); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyRequest(req, publicKey, now.Add(MaxClockSkew+time.Second)); err == nil {
-		t.Fatal("stale signed request must fail")
+	if err := VerifyRequest(req, publicKey, now.Add(MaxClockSkew+time.Second)); !errors.Is(err, ErrClockSkew) {
+		t.Fatalf("stale signed request must return ErrClockSkew, got %v", err)
 	}
 }
 
