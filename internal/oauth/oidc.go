@@ -351,29 +351,67 @@ func (s *Server) oidcToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func mcpUserInfoResponse(payload tokenPayload, user *cloud.User) map[string]any {
+	response := map[string]any{"sub": payload.Subject}
+	if user == nil {
+		return response
+	}
+	scopes := strings.Fields(payload.Scope)
+	if contains(scopes, "profile") {
+		response["name"] = oidcDisplayName(user.Email)
+	}
+	if contains(scopes, "email") {
+		response["email"] = user.Email
+		response["email_verified"] = true
+	}
+	return response
+}
+
 func (s *Server) oidcUserInfo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if !s.OIDC.enabled() {
-		webutil.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "temporarily_unavailable"})
-		return
-	}
 	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
 	if !strings.HasPrefix(authorization, "Bearer ") {
 		s.oidcUnauthorized(w)
 		return
 	}
-	claims, err := s.OIDC.verifyAccessToken(strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer ")), time.Now())
+	token := strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
+
+	// Penpot uses the OIDC access token issued by /oauth/token. ChatGPT's MCP
+	// connector discovers the same issuer-level userinfo endpoint after receiving
+	// an MCP access token from /token, so accept either token family while keeping
+	// each token's existing signature, expiry, resource and security-version
+	// validation intact.
+	if s.OIDC.enabled() {
+		if claims, err := s.OIDC.verifyAccessToken(token, time.Now()); err == nil {
+			if err := s.validateTokenSecurity(r.Context(), tokenPayload{Subject: claims.Subject, IssuedAt: claims.IssuedAt, SecurityVersion: claims.SecurityVersion}); err != nil {
+				s.oidcUnauthorized(w)
+				return
+			}
+			webutil.JSON(w, http.StatusOK, map[string]any{
+				"sub": claims.Subject, "name": claims.Name, "email": claims.Email, "email_verified": claims.EmailVerified,
+			})
+			return
+		}
+	}
+
+	payload, err := s.verify(token, "access")
 	if err != nil {
 		s.oidcUnauthorized(w)
 		return
 	}
-	if err := s.validateTokenSecurity(r.Context(), tokenPayload{Subject: claims.Subject, IssuedAt: claims.IssuedAt, SecurityVersion: claims.SecurityVersion}); err != nil {
+	if err := s.validateTokenSecurity(r.Context(), payload); err != nil {
 		s.oidcUnauthorized(w)
 		return
 	}
-	webutil.JSON(w, http.StatusOK, map[string]any{
-		"sub": claims.Subject, "name": claims.Name, "email": claims.Email, "email_verified": claims.EmailVerified,
-	})
+	var user *cloud.User
+	if contains(strings.Fields(payload.Scope), "profile") || contains(strings.Fields(payload.Scope), "email") {
+		user, err = s.Store.UserByID(r.Context(), payload.Subject)
+		if err != nil || user == nil {
+			s.oidcUnauthorized(w)
+			return
+		}
+	}
+	webutil.JSON(w, http.StatusOK, mcpUserInfoResponse(payload, user))
 }
 
 func (s *Server) oidcUnauthorized(w http.ResponseWriter) {

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/0xmarkhydra/codelocal/internal/cloud"
 )
 
 func testOIDCConfig() oidcProviderConfig {
@@ -74,6 +76,29 @@ func TestOIDCDiscoveryAndJWKSMatch(t *testing.T) {
 	mux.ServeHTTP(jwks, httptest.NewRequest(http.MethodGet, "/.well-known/jwks.json", nil))
 	if jwks.Code != http.StatusOK || !strings.Contains(jwks.Body.String(), server.OIDC.KeyID) || strings.Contains(jwks.Body.String(), server.OIDC.ClientSecret) {
 		t.Fatalf("unexpected JWKS response: %s", jwks.Body.String())
+	}
+}
+
+func TestMCPUserInfoResponseUsesMCPSubjectAndScopesGateProfileClaims(t *testing.T) {
+	server := testServer()
+	now := time.Now().Unix()
+	token := server.sign(tokenPayload{
+		Type: "access", Subject: "user-1", ClientID: "chatgpt", Resource: server.Resource,
+		Scope: "mcp:tools offline_access openid profile email", IssuedAt: now, Expires: now + 60, JTI: "mcp-userinfo",
+	})
+	payload, err := server.verify(token, "access")
+	if err != nil {
+		t.Fatalf("MCP access token should remain valid for userinfo compatibility: %v", err)
+	}
+	user := &cloud.User{ID: "user-1", Email: "user@example.com"}
+	claims := mcpUserInfoResponse(payload, user)
+	if claims["sub"] != "user-1" || claims["email"] != "user@example.com" || claims["email_verified"] != true {
+		t.Fatalf("unexpected scoped MCP userinfo claims: %#v", claims)
+	}
+
+	minimal := mcpUserInfoResponse(tokenPayload{Subject: "user-1", Scope: "mcp:tools offline_access"}, user)
+	if minimal["sub"] != "user-1" || minimal["email"] != nil || minimal["name"] != nil {
+		t.Fatalf("MCP-only token must not expose profile/email claims: %#v", minimal)
 	}
 }
 
