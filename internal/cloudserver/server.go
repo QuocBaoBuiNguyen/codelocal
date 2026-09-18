@@ -356,7 +356,8 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/client/runtime/revocation-ack", s.revocationAck)
 	mux.Handle("/client", s.Hub)
 	mcpProtected := s.OAuth.RequireMCP(s.MCP.Handler())
-	mux.Handle("/mcp", mcpgateway.PublicDiscoveryOrProtected(s.MCP.PublicDiscoveryHandler(), mcpProtected))
+	mcpAuthChallenge := mcpgateway.MCPAuthChallengeHandler(s.OAuth.BaseURL + "/.well-known/oauth-protected-resource")
+	mux.Handle("/mcp", mcpgateway.PublicDiscoveryOrProtected(s.MCP.PublicDiscoveryHandler(), mcpAuthChallenge, mcpProtected))
 	mux.HandleFunc("/api/v1/penpot/mcp", s.Penpot.ServeMCP)
 	mux.HandleFunc("/api/v1/penpot/ws", s.Penpot.ServeWS)
 

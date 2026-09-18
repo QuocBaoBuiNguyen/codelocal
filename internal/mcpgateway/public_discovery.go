@@ -164,12 +164,17 @@ func (s *Service) PublicDiscoveryHandler() http.Handler {
 }
 
 // PublicDiscoveryOrProtected always serves static discovery through the public
-// compatibility handler, even after OAuth. All non-discovery requests continue
-// through the protected handler, so tools/call and execution stay OAuth-bound.
-func PublicDiscoveryOrProtected(public, protected http.Handler) http.Handler {
+// compatibility handler. An unauthenticated tools/call receives the MCP-level
+// OAuth challenge required by ChatGPT/OpenAI docs; authenticated execution and
+// all other non-discovery requests remain behind the strict OAuth middleware.
+func PublicDiscoveryOrProtected(public, authChallenge, protected http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r != nil && publicDiscoveryRequest(r) {
 			public.ServeHTTP(w, r)
+			return
+		}
+		if r != nil && r.Header.Get("Authorization") == "" && unauthenticatedToolCallRequest(r) {
+			authChallenge.ServeHTTP(w, r)
 			return
 		}
 		protected.ServeHTTP(w, r)

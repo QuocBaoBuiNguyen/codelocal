@@ -10,7 +10,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestPublicToolSurfaceGenerationElevenKeepsCompactCatalog(t *testing.T) {
+func TestPublicToolSurfaceGenerationTwelveKeepsCompactCatalog(t *testing.T) {
 	first := PublicToolSurface()
 	second := PublicToolSurface()
 	if first != second {
@@ -19,23 +19,23 @@ func TestPublicToolSurfaceGenerationElevenKeepsCompactCatalog(t *testing.T) {
 	if first.Version != PublicToolSurfaceVersion {
 		t.Fatalf("surface version=%d want public version=%d", first.Version, PublicToolSurfaceVersion)
 	}
-	if first.Version != 11 {
-		t.Fatalf("surface version=%d want generation 11", first.Version)
+	if first.Version != 12 {
+		t.Fatalf("surface version=%d want generation 12", first.Version)
 	}
 	if first.Count != len(compactToolDefinitions()) || first.Count != 14 {
-		t.Fatalf("generation 11 should keep exactly 14 tools: surface=%d registry=%d", first.Count, len(compactToolDefinitions()))
+		t.Fatalf("generation 12 should keep exactly 14 tools: surface=%d registry=%d", first.Count, len(compactToolDefinitions()))
 	}
 	if len(first.Hash) != 64 {
-		t.Fatalf("generation-11 surface hash must be sha256: %q", first.Hash)
+		t.Fatalf("generation-12 surface hash must be sha256: %q", first.Hash)
 	}
 	for _, name := range []string{"workspace", "context", "terminal", "blog", "browser", "computer"} {
 		if _, ok := currentPublicToolNames()[name]; !ok {
-			t.Fatalf("generation 11 must advertise %s", name)
+			t.Fatalf("generation 12 must advertise %s", name)
 		}
 	}
 	for _, removed := range []string{"device", "project", "dependency", "lsp", "process", "approvals", "security", "mobile"} {
 		if _, ok := currentPublicToolNames()[removed]; ok {
-			t.Fatalf("generation 11 must not advertise grouped/internal tool %s", removed)
+			t.Fatalf("generation 12 must not advertise grouped/internal tool %s", removed)
 		}
 	}
 	publishArtifact := false
@@ -51,7 +51,7 @@ func TestPublicToolSurfaceGenerationElevenKeepsCompactCatalog(t *testing.T) {
 		}
 	}
 	if !publishArtifact {
-		t.Fatal("generation 11 terminal schema must advertise publish_artifact")
+		t.Fatal("generation 12 terminal schema must advertise publish_artifact")
 	}
 }
 

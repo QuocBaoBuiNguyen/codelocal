@@ -45,39 +45,42 @@ func TestPublicDiscoveryRequestAllowsOnlyCatalogHandshake(t *testing.T) {
 	}
 }
 
-func TestPublicDiscoveryOrProtectedAlwaysRoutesCatalogToCompatibilityHandler(t *testing.T) {
+func TestPublicDiscoveryOrProtectedRoutesDocsCompliantAuthChallenge(t *testing.T) {
 	var publicCalls atomic.Int32
+	var challengeCalls atomic.Int32
 	var protectedCalls atomic.Int32
 	public := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		publicCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	challenge := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		challengeCalls.Add(1)
 		w.WriteHeader(http.StatusOK)
 	})
 	protected := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		protectedCalls.Add(1)
 		w.WriteHeader(http.StatusUnauthorized)
 	})
-	handler := PublicDiscoveryOrProtected(public, protected)
+	handler := PublicDiscoveryOrProtected(public, challenge, protected)
 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, discoveryRequest("tools/list"))
-	if rec.Code != http.StatusOK || publicCalls.Load() != 1 || protectedCalls.Load() != 0 {
-		t.Fatalf("unauthenticated tools/list routing status=%d public=%d protected=%d", rec.Code, publicCalls.Load(), protectedCalls.Load())
+	if rec.Code != http.StatusOK || publicCalls.Load() != 1 || challengeCalls.Load() != 0 || protectedCalls.Load() != 0 {
+		t.Fatalf("tools/list routing status=%d public=%d challenge=%d protected=%d", rec.Code, publicCalls.Load(), challengeCalls.Load(), protectedCalls.Load())
 	}
 
-	req := discoveryRequest("tools/list")
-	req.Header.Set("Authorization", "Bearer token")
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || publicCalls.Load() != 2 || protectedCalls.Load() != 0 {
-		t.Fatalf("authenticated tools/list must still use catalog compatibility: status=%d public=%d protected=%d", rec.Code, publicCalls.Load(), protectedCalls.Load())
+	handler.ServeHTTP(rec, discoveryRequest("tools/call"))
+	if rec.Code != http.StatusOK || challengeCalls.Load() != 1 || protectedCalls.Load() != 0 {
+		t.Fatalf("unauthenticated tools/call must return MCP auth challenge: status=%d challenge=%d protected=%d", rec.Code, challengeCalls.Load(), protectedCalls.Load())
 	}
 
-	req = discoveryRequest("tools/call")
+	req := discoveryRequest("tools/call")
 	req.Header.Set("Authorization", "Bearer token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized || protectedCalls.Load() != 1 {
-		t.Fatalf("tools/call must stay protected: status=%d protected=%d", rec.Code, protectedCalls.Load())
+		t.Fatalf("authenticated tools/call must stay protected: status=%d protected=%d", rec.Code, protectedCalls.Load())
 	}
 }
 
