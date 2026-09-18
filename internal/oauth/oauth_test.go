@@ -85,6 +85,23 @@ func TestParseScopeAlwaysIncludesRequiredScopes(t *testing.T) {
 	}
 }
 
+func TestResolveBoundResourceAllowsOmissionButRejectsAudienceSwitch(t *testing.T) {
+	const bound = "https://codelocal.cloud/mcp"
+
+	if got, ok := resolveBoundResource("", bound); !ok || got != bound {
+		t.Fatalf("omitted token resource should inherit authorization resource: got=(%q,%v)", got, ok)
+	}
+	if got, ok := resolveBoundResource(bound, bound); !ok || got != bound {
+		t.Fatalf("matching token resource should be accepted: got=(%q,%v)", got, ok)
+	}
+	if got, ok := resolveBoundResource("https://attacker.example/mcp", bound); ok || got != "" {
+		t.Fatalf("token exchange must reject a resource audience switch: got=(%q,%v)", got, ok)
+	}
+	if got, ok := resolveBoundResource("", ""); ok || got != "" {
+		t.Fatalf("missing bound authorization resource must be rejected: got=(%q,%v)", got, ok)
+	}
+}
+
 func TestTokenSecurityVersionAndLegacyCompatibility(t *testing.T) {
 	state := cloud.UserSecurityState{Version: 3, PasswordChangedAt: 101_000}
 	if err := validateTokenAgainstSecurityState(tokenPayload{SecurityVersion: 3}, state); err != nil {

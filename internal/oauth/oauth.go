@@ -131,6 +131,24 @@ func parseScope(value string) string {
 	}
 	return strings.Join(ordered, " ")
 }
+
+// resolveBoundResource preserves the resource audience established during the
+// authorization grant. A token request may omit resource when authorization
+// already bound the grant to one; any explicit resource must still match
+// exactly so the audience cannot be switched during exchange or refresh.
+func resolveBoundResource(requested, bound string) (string, bool) {
+	if bound == "" {
+		return "", false
+	}
+	if requested == "" {
+		return bound, true
+	}
+	if requested != bound {
+		return "", false
+	}
+	return bound, true
+}
+
 func (s *Server) tokenPair(userID, clientID, resource, scope, familyID string, securityVersion int64, refreshJTI string, issuedAt int64) map[string]any {
 	scope = parseScope(scope)
 	accessJTI := s.deriveTokenID("access-jti", familyID, refreshJTI)
@@ -353,10 +371,14 @@ func (s *Server) Register(mux *http.ServeMux) {
 		w.Header().Set("Pragma", "no-cache")
 		grant := r.Form.Get("grant_type")
 		clientID := r.Form.Get("client_id")
-		resource := r.Form.Get("resource")
 		if grant == "authorization_code" {
 			record, err := s.Store.ConsumeOAuthCode(r.Context(), r.Form.Get("code"))
-			if err != nil || record == nil || record.ExpiresAt < time.Now().UnixMilli() || record.ClientID != clientID || record.RedirectURI != r.Form.Get("redirect_uri") || record.Resource != resource {
+			if err != nil || record == nil || record.ExpiresAt < time.Now().UnixMilli() || record.ClientID != clientID || record.RedirectURI != r.Form.Get("redirect_uri") {
+				webutil.JSON(w, 400, map[string]any{"error": "invalid_grant"})
+				return
+			}
+			resource, ok := resolveBoundResource(r.Form.Get("resource"), record.Resource)
+			if !ok {
 				webutil.JSON(w, 400, map[string]any{"error": "invalid_grant"})
 				return
 			}
@@ -376,7 +398,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 		}
 		if grant == "refresh_token" {
 			payload, err := s.verify(r.Form.Get("refresh_token"), "refresh")
-			if err != nil || payload.ClientID != clientID || payload.Resource != resource {
+			if err != nil || payload.ClientID != clientID {
+				webutil.JSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant"})
+				return
+			}
+			if _, ok := resolveBoundResource(r.Form.Get("resource"), payload.Resource); !ok {
 				webutil.JSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_grant"})
 				return
 			}
