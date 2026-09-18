@@ -45,7 +45,7 @@ func TestPublicDiscoveryRequestAllowsOnlyCatalogHandshake(t *testing.T) {
 	}
 }
 
-func TestPublicDiscoveryOrProtectedRoutesCatalogWithoutOpeningExecution(t *testing.T) {
+func TestPublicDiscoveryOrProtectedAlwaysRoutesCatalogToCompatibilityHandler(t *testing.T) {
 	var publicCalls atomic.Int32
 	var protectedCalls atomic.Int32
 	public := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -64,28 +64,35 @@ func TestPublicDiscoveryOrProtectedRoutesCatalogWithoutOpeningExecution(t *testi
 		t.Fatalf("unauthenticated tools/list routing status=%d public=%d protected=%d", rec.Code, publicCalls.Load(), protectedCalls.Load())
 	}
 
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, discoveryRequest("tools/call"))
-	if rec.Code != http.StatusUnauthorized || protectedCalls.Load() != 1 {
-		t.Fatalf("unauthenticated tools/call must be protected: status=%d protected=%d", rec.Code, protectedCalls.Load())
-	}
-
 	req := discoveryRequest("tools/list")
 	req.Header.Set("Authorization", "Bearer token")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized || protectedCalls.Load() != 2 {
-		t.Fatalf("authenticated discovery must use protected user route: status=%d protected=%d", rec.Code, protectedCalls.Load())
+	if rec.Code != http.StatusOK || publicCalls.Load() != 2 || protectedCalls.Load() != 0 {
+		t.Fatalf("authenticated tools/list must still use catalog compatibility: status=%d public=%d protected=%d", rec.Code, publicCalls.Load(), protectedCalls.Load())
+	}
+
+	req = discoveryRequest("tools/call")
+	req.Header.Set("Authorization", "Bearer token")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || protectedCalls.Load() != 1 {
+		t.Fatalf("tools/call must stay protected: status=%d protected=%d", rec.Code, protectedCalls.Load())
 	}
 }
 
-func TestPublicDiscoveryHandlerListsCompactToolsWithoutOAuthClaims(t *testing.T) {
+func publicDiscoveryFixture(t *testing.T) *httptest.Server {
+	t.Helper()
 	s := &Service{
 		servers:      map[string]*mcp.Server{},
 		routes:       map[string]map[string]string{},
 		shownUpdates: map[string]map[string]struct{}{},
 	}
-	httpServer := httptest.NewServer(s.PublicDiscoveryHandler())
+	return httptest.NewServer(s.PublicDiscoveryHandler())
+}
+
+func TestPublicDiscoveryHandlerListsCompactToolsWithoutOAuthClaims(t *testing.T) {
+	httpServer := publicDiscoveryFixture(t)
 	defer httpServer.Close()
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "codelocal-public-discovery-test", Version: "1"}, nil)
@@ -101,5 +108,31 @@ func TestPublicDiscoveryHandlerListsCompactToolsWithoutOAuthClaims(t *testing.T)
 	}
 	if len(result.Tools) != len(compactToolDefinitions()) || len(result.Tools) != 14 {
 		t.Fatalf("public discovery returned %d tools, want 14", len(result.Tools))
+	}
+}
+
+func TestPublicDiscoveryNormalizesIncompleteOpenAIModernToolsList(t *testing.T) {
+	httpServer := publicDiscoveryFixture(t)
+	defer httpServer.Close()
+
+	req, err := http.NewRequest(http.MethodPost, httpServer.URL+"/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Protocol-Version", modernMCPProtocolVersion)
+	// Deliberately omit Mcp-Method and all 2026 request _meta fields. The
+	// compatibility layer must repair this scanner request before SDK validation.
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("normalized tools/list status=%d want 200", response.StatusCode)
+	}
+	if got := response.Header.Get("X-CodeLocal-MCP-Transport"); got != "stateless-discovery" {
+		t.Fatalf("transport=%q want stateless-discovery", got)
 	}
 }

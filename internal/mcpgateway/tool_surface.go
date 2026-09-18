@@ -13,13 +13,12 @@ import (
 )
 
 // PublicToolSurfaceVersion is the compatibility generation of the public MCP
-// contract. Generation 10 keeps the compact 14-tool catalog, per-tool OAuth
-// security metadata, and permits catalog-only unauthenticated discovery so
-// ChatGPT can render Actions before/through account connection while execution
-// remains OAuth-protected. Bump the generation whenever the public contract or
-// discovery behavior changes so AI hosts invalidate cached tools/list catalogs.
+// contract. Generation 11 keeps the compact 14-tool catalog and adds a tolerant
+// stateless discovery compatibility layer for ChatGPT/OpenAI scanners while all
+// execution remains OAuth-protected. Bump the generation whenever the public
+// contract or discovery behavior changes so AI hosts invalidate cached catalogs.
 const (
-	PublicToolSurfaceVersion = 10
+	PublicToolSurfaceVersion = 11
 
 	// Version 1.5.16 was the generation-2 MCP identity. Keep the same release
 	// line and derive the patch from the surface generation so every future

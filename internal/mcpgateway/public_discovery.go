@@ -41,13 +41,13 @@ func publicDiscoveryEnvelope(value any) bool {
 	}
 }
 
-func publicDiscoveryRequest(r *http.Request) bool {
+func readPublicDiscoveryEnvelope(r *http.Request) ([]byte, any, bool) {
 	if r == nil || r.URL.Path != "/mcp" || r.Method != http.MethodPost || r.Body == nil || r.ContentLength < 0 || r.ContentLength > legacyToolCompatibilityMaxBody {
-		return false
+		return nil, nil, false
 	}
 	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		return false
+		return nil, nil, false
 	}
 	_ = r.Body.Close()
 	r.Body = io.NopCloser(bytes.NewReader(raw))
@@ -56,42 +56,119 @@ func publicDiscoveryRequest(r *http.Request) bool {
 	var envelope any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
-	return decoder.Decode(&envelope) == nil && publicDiscoveryEnvelope(envelope)
+	if decoder.Decode(&envelope) != nil || !publicDiscoveryEnvelope(envelope) {
+		return raw, envelope, false
+	}
+	return raw, envelope, true
 }
 
-// PublicDiscoveryHandler exposes only the static MCP catalog handshake. It uses
-// a dedicated catalog identity so anonymous discovery never obtains a real
-// CodeLocal user identity or workspace/runtime route.
+func publicDiscoveryRequest(r *http.Request) bool {
+	_, _, ok := readPublicDiscoveryEnvelope(r)
+	return ok
+}
+
+func normalizePublicDiscoveryMessage(message map[string]any, header http.Header) {
+	method, _ := message["method"].(string)
+	if method == "" {
+		return
+	}
+	if header.Get("Mcp-Method") == "" {
+		header.Set("Mcp-Method", method)
+	}
+
+	params, _ := message["params"].(map[string]any)
+	if params == nil {
+		params = map[string]any{}
+		message["params"] = params
+	}
+	meta, _ := params["_meta"].(map[string]any)
+	if meta == nil {
+		meta = map[string]any{}
+		params["_meta"] = meta
+	}
+
+	version := header.Get("Mcp-Protocol-Version")
+	if version == "" {
+		version, _ = meta[mcp.MetaKeyProtocolVersion].(string)
+	}
+	if version == "" && method == "server/discover" {
+		version = modernMCPProtocolVersion
+	}
+	if !isModernMCPProtocolVersion(version) {
+		return
+	}
+	if header.Get("Mcp-Protocol-Version") == "" {
+		header.Set("Mcp-Protocol-Version", version)
+	}
+	if _, ok := meta[mcp.MetaKeyProtocolVersion].(string); !ok {
+		meta[mcp.MetaKeyProtocolVersion] = version
+	}
+	if _, ok := meta[mcp.MetaKeyClientInfo]; !ok {
+		meta[mcp.MetaKeyClientInfo] = map[string]any{"name": "openai-discovery-compat", "version": "1"}
+	}
+	if _, ok := meta[mcp.MetaKeyClientCapabilities]; !ok {
+		meta[mcp.MetaKeyClientCapabilities] = map[string]any{}
+	}
+}
+
+func normalizePublicDiscoveryRequest(r *http.Request) bool {
+	_, envelope, ok := readPublicDiscoveryEnvelope(r)
+	if !ok {
+		return false
+	}
+
+	switch typed := envelope.(type) {
+	case map[string]any:
+		normalizePublicDiscoveryMessage(typed, r.Header)
+	case []any:
+		for _, item := range typed {
+			if message, ok := item.(map[string]any); ok {
+				normalizePublicDiscoveryMessage(message, r.Header)
+			}
+		}
+	}
+
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	r.ContentLength = int64(len(raw))
+	return true
+}
+
+// PublicDiscoveryHandler exposes only the static MCP catalog handshake. It is
+// intentionally stateless and normalizes OpenAI scanner requests before they
+// reach the strict Go MCP SDK 2026 transport validator. No real CodeLocal user,
+// workspace or runtime route exists on this handler.
 func (s *Service) PublicDiscoveryHandler() http.Handler {
-	stream := streamableMCPHandler(func(*http.Request) *mcp.Server {
+	stream := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return s.serverFor(publicCatalogUserID)
+	}, &mcp.StreamableHTTPOptions{
+		Stateless:                    true,
+		JSONResponse:                 true,
+		MaxRequestBodyBytes:          4 << 20,
+		PropagateRequestCancellation: true,
 	})
 	surface := PublicToolSurface()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !publicDiscoveryRequest(r) {
+		if !normalizePublicDiscoveryRequest(r) {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
+		w.Header().Set("X-CodeLocal-MCP-Transport", "stateless-discovery")
 		w.Header().Set("X-CodeLocal-Tool-Surface-Version", fmt.Sprint(surface.Version))
 		w.Header().Set("X-CodeLocal-Tool-Surface-Hash", surface.Hash)
 		stream.ServeHTTP(w, r)
 	})
 }
 
-// PublicDiscoveryOrProtected lets unauthenticated AI-host scanners read only the
-// MCP catalog needed to render Actions. Bearer-authenticated requests and every
-// non-discovery request continue through the OAuth-protected handler.
+// PublicDiscoveryOrProtected always serves static discovery through the public
+// compatibility handler, even after OAuth. All non-discovery requests continue
+// through the protected handler, so tools/call and execution stay OAuth-bound.
 func PublicDiscoveryOrProtected(public, protected http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r == nil {
-			protected.ServeHTTP(w, r)
-			return
-		}
-		if r.Header.Get("Authorization") != "" {
-			protected.ServeHTTP(w, r)
-			return
-		}
-		if publicDiscoveryRequest(r) {
+		if r != nil && publicDiscoveryRequest(r) {
 			public.ServeHTTP(w, r)
 			return
 		}
