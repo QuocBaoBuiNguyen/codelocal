@@ -13,6 +13,7 @@ import (
 	"github.com/0xmarkhydra/codelocal/internal/projectbrain"
 	"github.com/0xmarkhydra/codelocal/internal/protocol"
 	"github.com/0xmarkhydra/codelocal/internal/security"
+	"github.com/0xmarkhydra/codelocal/internal/taskexecution"
 )
 
 func newTestEngine(t *testing.T) *Engine {
@@ -113,6 +114,34 @@ func TestWorkspaceAccessModeCanBeSetInChatAndSurvivesSessionChanges(t *testing.T
 	approved, blockedState, _, err := engine.authorizeDecision("blocked test", engine.Root, "", "session-c", blocked)
 	if err == nil || approved || blockedState["status"] != "blocked" {
 		t.Fatalf("full access must preserve hard security blocks: approved=%v state=%#v err=%v", approved, blockedState, err)
+	}
+}
+
+func TestWorkspaceExecutionModeCanBeAppliedImmediately(t *testing.T) {
+	engine := newTestEngine(t)
+	if got := engine.TaskExecutionProvider(); got != taskexecution.ProviderLocalWorktree {
+		t.Fatalf("default task provider=%q want local_worktree", got)
+	}
+
+	result, err := engine.Handle(context.Background(), "execution_mode", map[string]any{"mode": "live"}, HandleOptions{RequestID: "execution-live", SessionID: "session-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, ok := result.(map[string]any)
+	if !ok || state["mode"] != "live" || state["provider"] != string(taskexecution.ProviderActiveCheckout) {
+		t.Fatalf("unexpected live execution state: %#v", result)
+	}
+	if got := engine.TaskExecutionProvider(); got != taskexecution.ProviderActiveCheckout {
+		t.Fatalf("live task provider=%q want active_checkout", got)
+	}
+
+	result, err = engine.Handle(context.Background(), "execution_mode", map[string]any{"mode": "safe"}, HandleOptions{RequestID: "execution-safe", SessionID: "session-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, ok = result.(map[string]any)
+	if !ok || state["mode"] != "safe" || state["provider"] != string(taskexecution.ProviderLocalWorktree) {
+		t.Fatalf("unexpected safe execution state: %#v", result)
 	}
 }
 

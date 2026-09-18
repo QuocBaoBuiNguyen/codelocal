@@ -18,6 +18,7 @@ type taskGitTarget struct {
 	Root       string
 	RepoPath   string
 	Binding    taskexecution.RepositoryBinding
+	Provider   taskexecution.Provider
 	Active     bool
 }
 
@@ -36,7 +37,7 @@ func (e *Engine) taskGitTarget(ctx context.Context, args map[string]any, opts Ha
 	}
 	if ok {
 		if binding, bound := taskBindingForRepository(bundle, repo); bound {
-			return taskGitTarget{Repository: repo, Root: binding.LocalPath, RepoPath: repoPath, Binding: binding, Active: true}, nil
+			return taskGitTarget{Repository: repo, Root: binding.LocalPath, RepoPath: repoPath, Binding: binding, Provider: bundle.Provider, Active: true}, nil
 		}
 	}
 	if !prepare {
@@ -51,33 +52,33 @@ func (e *Engine) taskGitTarget(ctx context.Context, args map[string]any, opts Ha
 		return taskGitTarget{}, err
 	}
 	if !target.Active {
-		return taskGitTarget{}, errors.New("task Git mutation requires an isolated repository binding")
+		return taskGitTarget{}, errors.New("task Git mutation requires a repository execution binding")
 	}
-	return taskGitTarget{Repository: repo, Root: target.Binding.LocalPath, RepoPath: repoPath, Binding: target.Binding, Active: true}, nil
+	return taskGitTarget{Repository: repo, Root: target.Binding.LocalPath, RepoPath: repoPath, Binding: target.Binding, Provider: target.Provider, Active: true}, nil
 }
 
-func taskGitMetadata(args map[string]any, repo repository.Checkout) map[string]any {
+func taskGitMetadata(args map[string]any, repo repository.Checkout, provider taskexecution.Provider) map[string]any {
 	return map[string]any{
 		"taskId":         strings.TrimSpace(asString(args[privateTaskExecutionID])),
-		"provider":       string(taskexecution.ProviderLocalWorktree),
+		"provider":       string(provider),
 		"repositoryId":   repo.ID,
 		"repositoryPath": repo.RelativePath,
 	}
 }
 
-func attachTaskGitMetadata(result map[string]any, args map[string]any, repo repository.Checkout, active bool) map[string]any {
+func attachTaskGitMetadata(result map[string]any, args map[string]any, repo repository.Checkout, provider taskexecution.Provider, active bool) map[string]any {
 	if result == nil {
 		result = map[string]any{}
 	}
 	if active {
-		result["taskExecution"] = taskGitMetadata(args, repo)
+		result["taskExecution"] = taskGitMetadata(args, repo, provider)
 	}
 	result["repositoryId"] = repo.ID
 	result["repositoryPath"] = repo.RelativePath
 	return result
 }
 
-func taskGitStatusItem(args map[string]any, repo repository.Checkout, root string) (map[string]any, error) {
+func taskGitStatusItem(args map[string]any, repo repository.Checkout, root string, provider taskexecution.Provider) (map[string]any, error) {
 	result, err := runGit(root, "status", "--short", "--branch")
 	if err != nil {
 		return nil, err
@@ -86,7 +87,7 @@ func taskGitStatusItem(args map[string]any, repo repository.Checkout, root strin
 	return map[string]any{
 		"repositoryId": repo.ID, "repositoryPath": repo.RelativePath,
 		"dirty": gitStatusDirty(output), "output": output,
-		"taskExecution": taskGitMetadata(args, repo),
+		"taskExecution": taskGitMetadata(args, repo, provider),
 	}, nil
 }
 
@@ -109,7 +110,7 @@ func (e *Engine) taskGitStatus(args map[string]any) (map[string]any, error) {
 			return e.gitStatus(selector)
 		}
 		result, err := runGit(binding.LocalPath, "status", "--short", "--branch")
-		return attachTaskGitMetadata(result, args, repo, true), err
+		return attachTaskGitMetadata(result, args, repo, bundle.Provider, true), err
 	}
 	items := []map[string]any{}
 	var combined strings.Builder
@@ -120,7 +121,7 @@ func (e *Engine) taskGitStatus(args map[string]any) (map[string]any, error) {
 		if err != nil {
 			continue
 		}
-		item, err := taskGitStatusItem(args, repo, binding.LocalPath)
+		item, err := taskGitStatusItem(args, repo, binding.LocalPath, bundle.Provider)
 		if err != nil {
 			return nil, err
 		}
@@ -161,7 +162,7 @@ func (e *Engine) taskGitDiff(ctx context.Context, args map[string]any, opts Hand
 		if result != nil {
 			result["diff"] = result["output"]
 		}
-		return attachTaskGitMetadata(result, args, target.Repository, target.Active), err
+		return attachTaskGitMetadata(result, args, target.Repository, target.Provider, target.Active), err
 	}
 	items := []map[string]any{}
 	var combined strings.Builder
@@ -182,7 +183,7 @@ func (e *Engine) taskGitDiff(ctx context.Context, args map[string]any, opts Hand
 		if strings.TrimSpace(diff) == "" {
 			continue
 		}
-		items = append(items, map[string]any{"repositoryId": repo.ID, "repositoryPath": repo.RelativePath, "diff": diff, "taskExecution": taskGitMetadata(args, repo)})
+		items = append(items, map[string]any{"repositoryId": repo.ID, "repositoryPath": repo.RelativePath, "diff": diff, "taskExecution": taskGitMetadata(args, repo, bundle.Provider)})
 		combined.WriteString("[" + repo.RelativePath + "]\n")
 		combined.WriteString(diff)
 		if !strings.HasSuffix(diff, "\n") {
@@ -244,7 +245,7 @@ func (e *Engine) taskGitRead(ctx context.Context, operation string, args map[str
 		return nil, fmt.Errorf("unsupported task Git read operation: %s", operation)
 	}
 	result, err := runGit(target.Root, gitArgs...)
-	return attachTaskGitMetadata(result, args, target.Repository, target.Active), err
+	return attachTaskGitMetadata(result, args, target.Repository, target.Provider, target.Active), err
 }
 
 func (e *Engine) taskGitStage(ctx context.Context, args map[string]any, opts HandleOptions, unstage bool) (map[string]any, error) {
@@ -266,7 +267,7 @@ func (e *Engine) taskGitStage(ctx context.Context, args map[string]any, opts Han
 	}
 	gitArgs = append(gitArgs, repoPaths...)
 	result, err := e.guardedGitAt(target.Root, gitArgs, asString(args["approvalToken"]), opts.SessionID)
-	return attachTaskGitMetadata(result, args, repo, true), err
+	return attachTaskGitMetadata(result, args, repo, target.Provider, true), err
 }
 
 func (e *Engine) taskGitCommit(ctx context.Context, args map[string]any, opts HandleOptions) (map[string]any, error) {
@@ -306,7 +307,7 @@ func (e *Engine) taskGitCommit(ctx context.Context, args map[string]any, opts Ha
 		}
 	}
 	result, err := e.guardedGitAt(target.Root, []string{"commit", "-m", asString(args["message"])}, asString(args["approvalToken"]), opts.SessionID)
-	return attachTaskGitMetadata(result, args, target.Repository, true), err
+	return attachTaskGitMetadata(result, args, target.Repository, target.Provider, true), err
 }
 
 func (e *Engine) taskGitPush(ctx context.Context, args map[string]any, opts HandleOptions) (map[string]any, error) {
@@ -325,5 +326,5 @@ func (e *Engine) taskGitPush(ctx context.Context, args map[string]any, opts Hand
 		gitArgs = append(gitArgs, branch)
 	}
 	result, err := e.guardedGitAt(target.Root, gitArgs, asString(args["approvalToken"]), opts.SessionID)
-	return attachTaskGitMetadata(result, args, target.Repository, true), err
+	return attachTaskGitMetadata(result, args, target.Repository, target.Provider, true), err
 }

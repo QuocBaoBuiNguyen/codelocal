@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/0xmarkhydra/codelocal/internal/cloud"
+	"github.com/0xmarkhydra/codelocal/internal/taskexecution"
 )
 
 func TestRuntimeConfigEnvironmentExportsOnlyNonSecretEnvKeys(t *testing.T) {
@@ -18,6 +19,15 @@ func TestRuntimeConfigEnvironmentExportsOnlyNonSecretEnvKeys(t *testing.T) {
 	}
 	if _, ok := env["VBEE_API_KEY"]; ok {
 		t.Fatal("secret unexpectedly merged into ordinary runtime config")
+	}
+}
+
+func TestRuntimeTaskExecutionProviderDefaultsSafeAndMapsLive(t *testing.T) {
+	if got := runtimeTaskExecutionProvider(cloud.RuntimeConfigSnapshot{}); got != taskexecution.ProviderLocalWorktree {
+		t.Fatalf("default provider=%q want %q", got, taskexecution.ProviderLocalWorktree)
+	}
+	if got := runtimeTaskExecutionProvider(cloud.RuntimeConfigSnapshot{ExecutionMode: cloud.RuntimeExecutionLive}); got != taskexecution.ProviderActiveCheckout {
+		t.Fatalf("live provider=%q want %q", got, taskexecution.ProviderActiveCheckout)
 	}
 }
 

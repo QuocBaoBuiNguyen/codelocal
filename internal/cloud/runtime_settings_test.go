@@ -51,6 +51,25 @@ func TestRuntimeConfigMergeAndOpenMontageDefault(t *testing.T) {
 	}
 }
 
+func TestRuntimeExecutionModeDefaultsSafeAndOnlyWorkspaceOverrides(t *testing.T) {
+	global := RuntimeConfigLayer{Scope: RuntimeScopeGlobal, ExecutionMode: RuntimeExecutionLive}
+	device := RuntimeConfigLayer{Scope: RuntimeScopeDevice, ExecutionMode: RuntimeExecutionLive}
+	got := MergeRuntimeConfig(defaultRuntimeConfigLayer(), global, device)
+	if got.ExecutionMode != RuntimeExecutionSafe || got.ExecutionModeConfigured {
+		t.Fatalf("non-workspace scope changed execution preference: mode=%q configured=%v", got.ExecutionMode, got.ExecutionModeConfigured)
+	}
+	workspace := RuntimeConfigLayer{Scope: RuntimeScopeWorkspace, ExecutionMode: RuntimeExecutionLive, ExecutionModeConfigured: true}
+	got = MergeRuntimeConfig(defaultRuntimeConfigLayer(), global, device, workspace)
+	if got.ExecutionMode != RuntimeExecutionLive || !got.ExecutionModeConfigured {
+		t.Fatalf("workspace live mode not applied: mode=%q configured=%v", got.ExecutionMode, got.ExecutionModeConfigured)
+	}
+	workspace.ExecutionMode = RuntimeExecutionMode("invalid")
+	got = MergeRuntimeConfig(defaultRuntimeConfigLayer(), workspace)
+	if got.ExecutionMode != RuntimeExecutionSafe || !got.ExecutionModeConfigured {
+		t.Fatalf("invalid execution mode must fail safe without forgetting explicit choice state: mode=%q configured=%v", got.ExecutionMode, got.ExecutionModeConfigured)
+	}
+}
+
 func TestValidRuntimeEnvKey(t *testing.T) {
 	for _, key := range []string{"VBEE_API_KEY", "FFMPEG_PATH", "A1"} {
 		if !ValidRuntimeEnvKey(key) {

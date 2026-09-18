@@ -580,6 +580,7 @@ func newWorkspaceWorker(r *Runtime, w workspace.Workspace) (*WorkspaceWorker, er
 	}
 	setting := r.runtimeSetting(w.WorkspaceID)
 	engine.SetRuntimeEnvironment(runtimeConfigEnvironment(setting.Snapshot), setting.Secrets)
+	engine.SetTaskExecutionProvider(runtimeTaskExecutionProvider(setting.Snapshot))
 	worker := &WorkspaceWorker{Runtime: r, Workspace: w, Engine: engine, done: make(chan struct{}), calls: map[string]context.CancelFunc{}}
 	worker.lastUsed.Store(time.Now().UnixMilli())
 	return worker, nil

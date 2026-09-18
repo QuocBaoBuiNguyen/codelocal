@@ -3,12 +3,15 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
+import { isAccountResource } from "@/lib/contracts/account";
 import { isWorkspacesResource, type WorkspacesResource } from "@/lib/contracts/resources";
+import { isRuntimeSettingsResource, type RuntimeExecutionMode } from "@/lib/contracts/runtime-settings";
 import { useTranslations } from "@/lib/i18n/provider";
 import type { MessageKey } from "@/lib/i18n/messages";
 import { AppIcon } from "./app-icon";
 import { ChatActionSummary, type ChatToolCall } from "./chat-action-summary";
 import { ChatContextSheet } from "./chat-context-sheet";
+import { ChatNewTaskDialog, GENERAL_PROJECT_KEY, type ChatNewTaskModel, type ChatNewTaskProject } from "./chat-new-task-dialog";
 import { ChatProviderManager } from "./chat-provider-manager";
 import { ChatTopBar } from "./chat-top-bar";
 import { ChatRichMessage } from "./chat-rich-message";
@@ -100,6 +103,11 @@ function modelLabel(model: string) {
 
 function workspaceKey(workspace: WorkspaceItem) {
   return workspaceIdentityKey(workspace);
+}
+
+function runtimeSettingsURL(workspace: WorkspaceItem) {
+  const params = new URLSearchParams({ scope: "workspace", deviceId: workspace.deviceId, workspaceId: workspace.workspaceId });
+  return `/api/v1/runtime/settings?${params.toString()}`;
 }
 
 function workspaceStatusLabel(workspace: WorkspaceItem): MessageKey {
@@ -247,6 +255,14 @@ export function DashboardChat() {
   const [selectedModel, setSelectedModel] = useState("");
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [providerManagerOpen, setProviderManagerOpen] = useState(false);
+  const [newTaskOpen, setNewTaskOpen] = useState(false);
+  const [newTaskWorkspaceKey, setNewTaskWorkspaceKey] = useState("");
+  const [newTaskModel, setNewTaskModel] = useState("");
+  const [newTaskExecutionMode, setNewTaskExecutionMode] = useState<RuntimeExecutionMode>("safe");
+  const [newTaskExecutionConfigured, setNewTaskExecutionConfigured] = useState(false);
+  const [newTaskExecutionLoading, setNewTaskExecutionLoading] = useState(false);
+  const [newTaskExecutionError, setNewTaskExecutionError] = useState(false);
+  const [activeExecutionMode, setActiveExecutionMode] = useState<RuntimeExecutionMode>("safe");
   const [modelSearch, setModelSearch] = useState("");
   const [contextSheetOpen, setContextSheetOpen] = useState(false);
   const [threadDrawerOpen, setThreadDrawerOpen] = useState(false);
@@ -256,6 +272,7 @@ export function DashboardChat() {
     const workspaceId = searchParams.get("workspaceId");
     return deviceId && workspaceId ? `${deviceId}::${workspaceId}` : "auto";
   });
+  const account = useDashboardResource("/api/v1/account", isAccountResource);
   const workspaces = useDashboardResource("/api/v1/workspaces", isWorkspacesResource);
   const chatFrameRef = useRef<HTMLElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -271,6 +288,7 @@ export function DashboardChat() {
   const mobileDrawerTriggerRef = useRef<HTMLButtonElement>(null);
   const threadDrawerTriggerRef = useRef<HTMLButtonElement>(null);
   const threadDrawerCloseRef = useRef<HTMLButtonElement>(null);
+  const newTaskExecutionRequestRef = useRef(0);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("codelocal.chat.contextMode");
@@ -343,6 +361,7 @@ export function DashboardChat() {
     () => workspaceItems.find((workspace) => workspaceKey(workspace) === selectedWorkspaceKey),
     [selectedWorkspaceKey, workspaceItems],
   );
+  const csrf = account.state.kind === "ready" ? account.state.value.csrf : "";
   const activeModels = useMemo(
     () => models.filter((model) => model !== "auto"),
     [models],
@@ -351,6 +370,18 @@ export function DashboardChat() {
     () => new Map(modelOptions.map((option) => [option.id, option])),
     [modelOptions],
   );
+  const newTaskProjects = useMemo<ChatNewTaskProject[]>(() => workspaceItems.map((workspace) => ({
+    key: workspaceKey(workspace),
+    name: workspace.workspaceName,
+    deviceName: workspace.deviceName,
+    statusLabel: t(workspaceStatusLabel(workspace)),
+    active: Boolean(workspace.runtimeOnline && workspace.status === "active"),
+  })), [t, workspaceItems]);
+  const newTaskModels = useMemo<ChatNewTaskModel[]>(() => activeModels.map((model) => ({
+    id: model,
+    label: modelOptionMap.get(model)?.label || modelLabel(model),
+    provider: modelOptionMap.get(model)?.provider || "Your AI",
+  })), [activeModels, modelOptionMap]);
   const labelForModel = (model: string) => modelOptionMap.get(model)?.label || modelLabel(model);
   const providerForModel = (model: string) => modelOptionMap.get(model)?.provider || "Your AI";
   const visibleModels = useMemo(() => {
@@ -382,11 +413,36 @@ export function DashboardChat() {
     ? workspaceItems.find((workspace) => workspaceKey(workspace) === activeThreadWorkspaceKey)
     : selectedWorkspace;
   const headerProject = activeProject || selectedWorkspace;
+  const headerProjectKey = headerProject ? workspaceKey(headerProject) : "";
+  const executionBadge = activeExecutionMode === "live" ? "LIVE" : "SAFE";
   const mobileProjectSubtitle = headerProject
-    ? `${headerProject.workspaceName} · ${headerProject.deviceName} · ${t(workspaceStatusLabel(headerProject))}`
-    : t("No project");
+    ? `${headerProject.workspaceName} · ${executionBadge} · ${t(workspaceStatusLabel(headerProject))}`
+    : `${t("General")} · ${t("No project")}`;
   const contextModeLabel = contextMode === "off" ? t("Off") : contextMode === "aggressive" ? t("Aggressive") : t("Smart");
-  const mobileContextSummary = `${selectedWorkspace?.workspaceName || t("Auto")} · ${mode === "ask" ? "Ask" : mode === "plan" ? "Plan" : "Agent"} · ${labelForModel(selectedModel)} · ${t("Context")}: ${contextModeLabel}`;
+  const mobileContextSummary = `${selectedWorkspace?.workspaceName || t("General")} · ${mode === "ask" ? "Ask" : mode === "plan" ? "Plan" : "Agent"} · ${labelForModel(selectedModel)} · ${t("Context")}: ${contextModeLabel}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!headerProject) {
+      queueMicrotask(() => {
+        if (!cancelled) setActiveExecutionMode("safe");
+      });
+      return () => { cancelled = true; };
+    }
+    fetch(runtimeSettingsURL(headerProject), { credentials: "include" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`runtime settings ${response.status}`);
+        return response.json() as Promise<unknown>;
+      })
+      .then((data) => {
+        if (cancelled || !isRuntimeSettingsResource(data)) return;
+        setActiveExecutionMode(data.effective.executionMode === "live" ? "live" : "safe");
+      })
+      .catch(() => {
+        if (!cancelled) setActiveExecutionMode("safe");
+      });
+    return () => { cancelled = true; };
+  }, [headerProject, headerProjectKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -399,31 +455,25 @@ export function DashboardChat() {
         if (!response.ok) throw new Error(`threads ${response.status}`);
         return response.json() as Promise<{ threads?: ChatThread[] }>;
       })
-      .then(async (data) => {
+      .then((data) => {
         if (cancelled || !data) return;
-        let available = Array.isArray(data.threads) ? data.threads : [];
-        if (available.length === 0) {
-          const response = await fetch("/api/v1/dashboard/chat/threads", {
-            method: "POST",
-            credentials: "include",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ model: "auto" }),
-          });
-          if (!response.ok) throw new Error(`create thread ${response.status}`);
-          const created = (await response.json()) as { thread?: ChatThread };
-          available = created.thread ? [created.thread] : [];
-        }
-        if (cancelled) return;
+        const available = Array.isArray(data.threads) ? data.threads : [];
         setThreads(available);
-        if (available[0]) {
-          const initialWorkspaceKey = available[0].workspaceKey;
-          if (initialWorkspaceKey) {
-            setExpandedProjects((current) => new Set(current).add(initialWorkspaceKey));
-          }
+        if (!available[0]) {
           setMessages([]);
-          setHistoryLoading(true);
-          setActiveThreadId(available[0].id);
+          setHistoryLoading(false);
+          setActiveThreadId(null);
+          setNewTaskWorkspaceKey("");
+          setNewTaskOpen(true);
+          return;
         }
+        const initialWorkspaceKey = available[0].workspaceKey;
+        if (initialWorkspaceKey) {
+          setExpandedProjects((current) => new Set(current).add(initialWorkspaceKey));
+        }
+        setMessages([]);
+        setHistoryLoading(true);
+        setActiveThreadId(available[0].id);
       })
       .catch(() => {
         if (!cancelled) setNotice({ kind: "error", text: t("Could not load conversations") });
@@ -486,10 +536,15 @@ export function DashboardChat() {
       setSelectedModel((current) => preserveSelection && available.includes(current)
         ? current
         : data.default_model && available.includes(data.default_model) ? data.default_model : available[0] || "");
+      const selectable = available.filter((model) => model !== "auto");
+      setNewTaskModel((current) => selectable.includes(current)
+        ? current
+        : data.default_model && data.default_model !== "auto" && selectable.includes(data.default_model) ? data.default_model : selectable[0] || "");
     } catch {
       setModels([]);
       setModelOptions([]);
       setSelectedModel("");
+      setNewTaskModel("");
     }
   }
 
@@ -725,48 +780,134 @@ export function DashboardChat() {
     }
   }
 
-  async function newThread() {
-    if (loading || threadActionLoading) return;
-    setThreadActionLoading(true);
-    setNotice(null);
+  async function loadNewTaskExecution(projectKey: string) {
+    const requestID = newTaskExecutionRequestRef.current + 1;
+    newTaskExecutionRequestRef.current = requestID;
+    const workspace = workspaceItems.find((item) => workspaceKey(item) === projectKey);
+    if (!workspace) {
+      setNewTaskExecutionLoading(false);
+      setNewTaskExecutionError(true);
+      return;
+    }
+    setNewTaskExecutionLoading(true);
+    setNewTaskExecutionError(false);
     try {
-      const thread = await createThreadRecord({ workspaceKey: "" });
-      setThreads((current) => [thread, ...current]);
-      setSelectedWorkspaceKey("auto");
-      setHistoryLoading(true);
-      setActiveThreadId(thread.id);
-      setMessages([]);
-      setInput("");
-      discardImage();
-      window.requestAnimationFrame(() => composerRef.current?.focus());
+      const response = await fetch(runtimeSettingsURL(workspace), { credentials: "include" });
+      if (!response.ok) throw new Error(`runtime settings ${response.status}`);
+      const data = await response.json() as unknown;
+      if (newTaskExecutionRequestRef.current !== requestID || !isRuntimeSettingsResource(data)) return;
+      setNewTaskExecutionMode(data.effective.executionMode === "live" ? "live" : "safe");
+      setNewTaskExecutionConfigured(Boolean(data.effective.executionModeConfigured));
     } catch {
-      setNotice({ kind: "error", text: t("Could not create a new conversation") });
+      if (newTaskExecutionRequestRef.current === requestID) {
+        setNewTaskExecutionMode("safe");
+        setNewTaskExecutionConfigured(false);
+        setNewTaskExecutionError(true);
+      }
     } finally {
-      setThreadActionLoading(false);
+      if (newTaskExecutionRequestRef.current === requestID) setNewTaskExecutionLoading(false);
     }
   }
 
-  async function newProjectThread(projectKey: string) {
-    if (loading || threadActionLoading) return;
+  function openNewTaskDialog(projectKey = "") {
+    setNotice(null);
+    setNewTaskWorkspaceKey(projectKey);
+    setNewTaskModel((current) => activeModels.includes(current)
+      ? current
+      : activeModels.includes(selectedModel) ? selectedModel : activeModels[0] || "");
+    setNewTaskOpen(true);
+    if (!projectKey || projectKey === GENERAL_PROJECT_KEY) {
+      newTaskExecutionRequestRef.current += 1;
+      setNewTaskExecutionMode("safe");
+      setNewTaskExecutionConfigured(false);
+      setNewTaskExecutionLoading(false);
+      setNewTaskExecutionError(false);
+      return;
+    }
+    void loadNewTaskExecution(projectKey);
+  }
+
+  function chooseNewTaskProject(projectKey: string) {
+    setNewTaskWorkspaceKey(projectKey);
+    if (!projectKey || projectKey === GENERAL_PROJECT_KEY) {
+      newTaskExecutionRequestRef.current += 1;
+      setNewTaskExecutionMode("safe");
+      setNewTaskExecutionConfigured(false);
+      setNewTaskExecutionLoading(false);
+      setNewTaskExecutionError(false);
+      return;
+    }
+    void loadNewTaskExecution(projectKey);
+  }
+
+  async function saveWorkspaceExecution(projectKey: string, executionMode: RuntimeExecutionMode) {
+    const workspace = workspaceItems.find((item) => workspaceKey(item) === projectKey);
+    if (!workspace || !csrf) return false;
+    const body = new URLSearchParams({
+      csrf,
+      scope: "workspace",
+      deviceId: workspace.deviceId,
+      workspaceId: workspace.workspaceId,
+      mode: executionMode,
+    });
+    const response = await fetch("/api/v1/runtime/settings/execution", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" },
+      body,
+    });
+    if (response.status === 401) {
+      router.replace("/login");
+      return false;
+    }
+    if (!response.ok) return false;
+    if (headerProjectKey === projectKey) setActiveExecutionMode(executionMode);
+    return true;
+  }
+
+  async function startNewTask() {
+    if (loading || threadActionLoading || !newTaskWorkspaceKey || !newTaskModel) return;
+    const general = newTaskWorkspaceKey === GENERAL_PROJECT_KEY;
+    const projectKey = general ? "" : newTaskWorkspaceKey;
     setThreadActionLoading(true);
     setNotice(null);
     try {
-      const thread = await createThreadRecord({ workspaceKey: projectKey });
+      if (!general) {
+        const saved = await saveWorkspaceExecution(projectKey, newTaskExecutionMode);
+        if (!saved) throw new Error("execution_mode_update_failed");
+      }
+      const thread = await createThreadRecord({ workspaceKey: projectKey, model: newTaskModel });
       setThreads((current) => [thread, ...current]);
-      setExpandedProjects((current) => new Set(current).add(projectKey));
-      setSelectedWorkspaceKey(projectKey);
+      if (projectKey) setExpandedProjects((current) => new Set(current).add(projectKey));
+      setSelectedWorkspaceKey(projectKey || "auto");
+      setSelectedModel(newTaskModel);
       setHistoryLoading(true);
       setActiveThreadId(thread.id);
       setMessages([]);
       setInput("");
       discardImage();
       setThreadDrawerOpen(false);
+      setContextSheetOpen(false);
+      setNewTaskOpen(false);
+      if (projectKey) setActiveExecutionMode(newTaskExecutionMode);
       window.requestAnimationFrame(() => composerRef.current?.focus());
     } catch {
-      setNotice({ kind: "error", text: t("Could not create a task in this project") });
+      setNotice({ kind: "error", text: t("Could not start the task") });
     } finally {
       setThreadActionLoading(false);
     }
+  }
+
+  function newThread() {
+    if (loading || threadActionLoading) return;
+    setThreadDrawerOpen(false);
+    openNewTaskDialog("");
+  }
+
+  function newProjectThread(projectKey: string) {
+    if (loading || threadActionLoading) return;
+    setThreadDrawerOpen(false);
+    openNewTaskDialog(projectKey);
   }
 
   async function renameThread(thread: ChatThread) {
@@ -831,16 +972,9 @@ export function DashboardChat() {
     }
     let requestThreadId = activeThreadId;
     if (!requestThreadId) {
-      try {
-        const thread = await createThreadRecord();
-        requestThreadId = thread.id;
-        setThreads((current) => [thread, ...current]);
-        setHistoryLoading(true);
-        setActiveThreadId(thread.id);
-      } catch {
-        setNotice({ kind: "error", text: t("Could not create a conversation to send the message") });
-        return;
-      }
+      setNotice({ kind: "status", text: t("Choose a project before sending your first message.") });
+      openNewTaskDialog("");
+      return;
     }
 
     const pendingImage = image;
@@ -1213,7 +1347,7 @@ export function DashboardChat() {
         <ChatSidebarFooter onNavigate={() => setThreadDrawerOpen(false)} />
       </aside>
 
-      <section ref={chatFrameRef} className={styles.chatShell} aria-label={t("Chat with CodeLocal")} aria-hidden={contextSheetOpen || threadDrawerOpen || undefined}>
+      <section ref={chatFrameRef} className={styles.chatShell} aria-label={t("Chat with CodeLocal")} aria-hidden={contextSheetOpen || threadDrawerOpen || newTaskOpen || undefined}>
         <ChatTopBar
           drawerOpen={threadDrawerOpen}
           title={activeThread?.title || t("New task")}
@@ -1221,6 +1355,7 @@ export function DashboardChat() {
           disabled={loading || threadActionLoading}
           menuRef={mobileDrawerTriggerRef}
           onOpenMenu={() => setThreadDrawerOpen(true)}
+          onOpenTaskSetup={() => openNewTaskDialog(headerProjectKey || GENERAL_PROJECT_KEY)}
           onNewThread={() => void newThread()}
         />
         <div className={styles.chatHead}>
@@ -1230,10 +1365,35 @@ export function DashboardChat() {
             </button>
             <div>
               <h1 title={activeThread?.title || t("New task")}>{activeThread?.title || t("New task")}</h1>
-              <span title={mobileProjectSubtitle}>{headerProject?.workspaceName || t("No project")}</span>
+              <span title={mobileProjectSubtitle}>{headerProject?.workspaceName || t("General")}</span>
             </div>
           </div>
           <div className={styles.chatActions}>
+            <button
+              className={`${styles.projectPicker} ${styles.contextChip}`}
+              type="button"
+              onClick={() => openNewTaskDialog(headerProjectKey || GENERAL_PROJECT_KEY)}
+              disabled={loading || threadActionLoading}
+              title={t("Switch project by starting a new task")}
+              aria-label={t("Switch project by starting a new task")}
+            >
+              <span className={styles.projectPickerIcon}><AppIcon name={headerProject ? "folder" : "chat"} size={16} /></span>
+              <span className={styles.contextChipLabel}>{headerProject?.workspaceName || t("General")}</span>
+              <span className={styles.modelPickerChevron} aria-hidden="true">⌄</span>
+            </button>
+            {headerProject ? (
+              <button
+                className={`${styles.executionModeChip} ${activeExecutionMode === "live" ? styles.executionModeChipLive : ""}`}
+                type="button"
+                onClick={() => openNewTaskDialog(headerProjectKey)}
+                disabled={loading || threadActionLoading}
+                title={t("Change execution mode by starting a new task")}
+                aria-label={t("Change execution mode by starting a new task")}
+              >
+                <AppIcon name={activeExecutionMode === "live" ? "runtime" : "shield"} size={15} />
+                <span>{activeExecutionMode === "live" ? "LIVE" : t("Safe Workspace")}</span>
+              </button>
+            ) : null}
             <label className={styles.contextModePicker} title={t("Context optimization")}>
               <span>{t("Context")}</span>
               <select value={contextMode} onChange={(event) => setContextMode(event.target.value as ChatContextMode)} aria-label={t("Context optimization")} disabled={loading}>
@@ -1399,6 +1559,28 @@ export function DashboardChat() {
         </form>
         {notice ? <div className={styles.chatHint} role={notice.kind === "error" ? "alert" : "status"}>{notice.text}</div> : null}
       </section>
+      <ChatNewTaskDialog
+        open={newTaskOpen}
+        projects={newTaskProjects}
+        selectedProjectKey={newTaskWorkspaceKey}
+        executionMode={newTaskExecutionMode}
+        executionConfigured={newTaskExecutionConfigured}
+        executionLoading={newTaskExecutionLoading}
+        executionError={newTaskExecutionError}
+        models={newTaskModels}
+        selectedModel={newTaskModel}
+        busy={threadActionLoading}
+        onProjectChange={chooseNewTaskProject}
+        onExecutionModeChange={(value) => {
+          setNewTaskExecutionMode(value);
+          setNewTaskExecutionConfigured(false);
+        }}
+        onModelChange={setNewTaskModel}
+        onClose={() => {
+          if (!threadActionLoading) setNewTaskOpen(false);
+        }}
+        onStart={() => void startNewTask()}
+      />
       <ChatContextSheet
         open={contextSheetOpen}
         triggerRef={contextTriggerRef}
@@ -1415,7 +1597,11 @@ export function DashboardChat() {
         workspaceStatusLabel={(workspace) => t(workspaceStatusLabel(workspace))}
         onClose={() => setContextSheetOpen(false)}
         onAttach={() => { setContextSheetOpen(false); window.requestAnimationFrame(() => fileRef.current?.click()); }}
-        onWorkspaceChange={setSelectedWorkspaceKey}
+        onWorkspaceChange={(value) => {
+          if (value === selectedWorkspaceKey) return;
+          setContextSheetOpen(false);
+          openNewTaskDialog(value === "auto" ? GENERAL_PROJECT_KEY : value);
+        }}
         onModeChange={setMode}
         onModelChange={setSelectedModel}
         onContextModeChange={setContextMode}

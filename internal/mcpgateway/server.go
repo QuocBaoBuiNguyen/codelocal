@@ -824,6 +824,8 @@ func (s *Service) callLocal(ctx context.Context, userID, session, tool string, a
 		}
 		notice := s.claimUpdate(userID, session, workspace.Key, workspace.ClientVersion)
 		return textResultWithNotice(workspace, false, notice), nil
+	case "execution_mode":
+		return s.callExecutionMode(ctx, userID, session, args)
 	case "memory_remember":
 		return s.rememberConversationMemory(ctx, userID, session, args)
 	case "memory_recall":

@@ -4,7 +4,10 @@ import "time"
 
 type Provider string
 
-const ProviderLocalWorktree Provider = "local_worktree"
+const (
+	ProviderLocalWorktree  Provider = "local_worktree"
+	ProviderActiveCheckout Provider = "active_checkout"
+)
 
 type RuntimeGeneration string
 

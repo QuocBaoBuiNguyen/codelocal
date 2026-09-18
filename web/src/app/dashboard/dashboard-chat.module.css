@@ -407,6 +407,60 @@
   stroke-width: 1.7;
 }
 
+.contextChip {
+  min-width: 132px;
+  max-width: 190px;
+  color: rgba(244, 244, 247, 0.9);
+  font: inherit;
+  cursor: pointer;
+}
+
+.contextChipLabel {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 620;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.executionModeChip {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.075);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.028);
+  color: rgba(205, 214, 232, 0.72);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.executionModeChip:hover:not(:disabled) {
+  border-color: rgba(126, 153, 255, 0.22);
+  background: rgba(255, 255, 255, 0.055);
+  color: rgba(241, 244, 249, 0.92);
+}
+
+.executionModeChipLive {
+  border-color: rgba(102, 215, 145, 0.2);
+  background: rgba(67, 168, 106, 0.065);
+  color: rgba(142, 226, 171, 0.9);
+}
+
+.executionModeChip:disabled,
+.contextChip:disabled {
+  opacity: 0.48;
+  cursor: default;
+}
+
 .modelPickerShell {
   position: relative;
   z-index: 40;

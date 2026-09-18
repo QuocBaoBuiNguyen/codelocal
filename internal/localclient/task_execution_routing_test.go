@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/0xmarkhydra/codelocal/internal/orchestration"
+	"github.com/0xmarkhydra/codelocal/internal/taskexecution"
 )
 
 func taskExecutionArgs(taskID, owner string) map[string]any {
@@ -57,6 +58,33 @@ func TestTaskMutationUsesPrivateWorktreeAndReadOverlay(t *testing.T) {
 	privatePath := bundle.RepositoryBindings[0].LocalPath
 	if strings.Contains(fmt.Sprint(result), privatePath) || strings.Contains(fmt.Sprint(taskRead), privatePath) {
 		t.Fatalf("private worktree path leaked in model-facing result: result=%#v read=%#v", result, taskRead)
+	}
+}
+
+func TestLiveProjectMutationUsesAuthoritativeCheckout(t *testing.T) {
+	engine, _, auth := newMultiRepoEngine(t)
+	engine.SetTaskExecutionProvider(taskexecution.ProviderActiveCheckout)
+	args := taskExecutionArgs("task-live", "session-a")
+	opts := HandleOptions{SessionID: "session-a"}
+
+	result, err := engine.taskExactEdit(context.Background(), args, opts, "backend/auth/login.go", "initial\n", "live change\n", false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainData, err := os.ReadFile(filepath.Join(auth, "login.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(mainData) != "live change\n" {
+		t.Fatalf("live project did not modify authoritative checkout: %q", mainData)
+	}
+	bundle, ok, err := engine.TaskExecutions.Store.Get(engine.WorkspaceKey, "task-live")
+	if err != nil || !ok || bundle.Provider != taskexecution.ProviderActiveCheckout {
+		t.Fatalf("live execution bundle missing or wrong provider: %#v ok=%v err=%v", bundle, ok, err)
+	}
+	metadata, _ := result["taskExecution"].(map[string]any)
+	if metadata["provider"] != string(taskexecution.ProviderActiveCheckout) {
+		t.Fatalf("live execution metadata did not report active checkout: %#v", result)
 	}
 }
 

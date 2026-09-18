@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/0xmarkhydra/codelocal/internal/cloud"
+	"github.com/0xmarkhydra/codelocal/internal/gateway"
 	"github.com/0xmarkhydra/codelocal/internal/webutil"
 )
 
@@ -78,6 +79,56 @@ func (s *Server) runtimeConfigMutationAPI(w http.ResponseWriter, r *http.Request
 	}
 	s.Store.Audit(cloud.AuditEvent{UserID: identity.User.ID, Event: "runtime.config_updated", DeviceID: deviceID, WorkspaceID: workspaceID, Detail: map[string]any{"scope": scope, "key": key, "action": first(r.FormValue("action"), "set")}})
 	webutil.JSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) runtimeExecutionModeMutationAPI(w http.ResponseWriter, r *http.Request) {
+	identity, ok := s.identity(r)
+	if !ok {
+		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
+		return
+	}
+	if !s.WebAuth.VerifyCSRF(r) {
+		webutil.JSON(w, http.StatusForbidden, map[string]any{"error": "invalid_csrf"})
+		return
+	}
+	scope, deviceID, workspaceID := runtimeTargetFromRequest(r)
+	if scope != cloud.RuntimeScopeWorkspace || deviceID == "" || workspaceID == "" {
+		webutil.JSON(w, http.StatusBadRequest, map[string]any{"error": "workspace_scope_required"})
+		return
+	}
+	mode := cloud.RuntimeExecutionMode(strings.TrimSpace(r.FormValue("mode")))
+	if !cloud.ValidRuntimeExecutionMode(mode) {
+		webutil.JSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_execution_mode"})
+		return
+	}
+	layer, err := s.Store.RuntimeSettingsLayer(r.Context(), identity.User.ID, scope, deviceID, workspaceID)
+	if err != nil {
+		webutil.JSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_runtime_scope"})
+		return
+	}
+	layer.ExecutionMode = mode
+	layer.ExecutionModeConfigured = true
+	if err := s.Store.PutRuntimeSettingsLayer(r.Context(), identity.User.ID, layer, deviceID, workspaceID); err != nil {
+		webutil.JSON(w, http.StatusInternalServerError, map[string]any{"error": "execution_mode_update_failed"})
+		return
+	}
+	s.Store.Audit(cloud.AuditEvent{UserID: identity.User.ID, Event: "runtime.execution_mode_updated", DeviceID: deviceID, WorkspaceID: workspaceID, Detail: map[string]any{"mode": mode, "source": "dashboard"}})
+	runtimeApplied := false
+	if s.Workspaces != nil && s.Hub != nil {
+		workspaceKey := gateway.ClientKey(identity.User.ID, deviceID, workspaceID)
+		if catalog, catalogErr := s.Workspaces.Catalog(r.Context(), identity.User.ID); catalogErr == nil {
+			for _, workspace := range catalog {
+				if workspace.Key != workspaceKey || workspace.Status != "active" {
+					continue
+				}
+				requestID := cloud.RandomHex(16)
+				result, callErr := s.Hub.Call(r.Context(), identity.User.ID, workspaceKey, "dashboard-settings", "execution_mode", map[string]any{"mode": string(mode)}, false, requestID)
+				runtimeApplied = callErr == nil && result.OK
+				break
+			}
+		}
+	}
+	webutil.JSON(w, http.StatusOK, map[string]any{"ok": true, "mode": mode, "runtimeApplied": runtimeApplied})
 }
 
 func (s *Server) runtimeSecretMutationAPI(w http.ResponseWriter, r *http.Request) {

@@ -67,7 +67,7 @@ func universalCompactArgs(action string) map[string]any {
 		"name": "Symbol", "query": "query", "line": 1, "column": 1, "limit": 10,
 		"content": "content", "oldText": "old", "newText": "new", "patch": "diff --git a/a b/a", "files": []any{map[string]any{"path": "file.go", "edits": []any{map[string]any{"replacement": "x"}}}},
 		"message": "commit", "command": "go test ./...", "processId": "process", "input": "input", "cols": 120, "rows": 36,
-		"server": "server", "tool": "tool", "id": "approval", "actionKey": "approval-key",
+		"server": "server", "tool": "tool", "id": "approval", "actionKey": "approval-key", "executionMode": "live",
 		"memories": []any{map[string]any{"kind": "goal", "summary": "Ship CodeLocal", "scope": "global"}},
 		"url":      "https://example.com", "ref": "e1", "text": "input", "windowId": "window-1", "elementId": "element-1", "device": "mobile-device",
 		"steps": []any{map[string]any{"action": "click", "target": "Save"}},

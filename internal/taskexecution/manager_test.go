@@ -43,6 +43,74 @@ func TestManagerPersistsAndResumesTaskExecutionBundle(t *testing.T) {
 	}
 }
 
+func TestManagerActiveCheckoutBindsAuthoritativeRepository(t *testing.T) {
+	ctx := context.Background()
+	repo := makeTaskRepo(t)
+	manager := NewManager(NewStore(filepath.Join(t.TempDir(), "state")), nil)
+	req := PrepareRequest{TaskID: "task-live", WorkspaceKey: "workspace", Repositories: []repository.Checkout{repo}}
+
+	bundle, err := manager.Ensure(ctx, req, ProviderActiveCheckout, "agent-a", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.Provider != ProviderActiveCheckout || len(bundle.RepositoryBindings) != 1 {
+		t.Fatalf("unexpected live execution bundle: %#v", bundle)
+	}
+	if got := filepath.Clean(bundle.RepositoryBindings[0].LocalPath); got != filepath.Clean(repo.Root) {
+		t.Fatalf("live execution path=%q want authoritative checkout %q", got, repo.Root)
+	}
+}
+
+func TestManagerKeepsExistingProviderWhenPreferenceChanges(t *testing.T) {
+	ctx := context.Background()
+	repo := makeTaskRepo(t)
+	manager := NewManager(NewStore(filepath.Join(t.TempDir(), "state")), NewLocalWorktreeProvider(filepath.Join(t.TempDir(), "worktrees")))
+	req := PrepareRequest{TaskID: "task-stable-provider", WorkspaceKey: "workspace", Repositories: []repository.Checkout{repo}}
+
+	first, err := manager.Ensure(ctx, req, ProviderActiveCheckout, "agent-a", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Release(req.WorkspaceKey, req.TaskID, "agent-a"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := manager.Ensure(ctx, req, ProviderLocalWorktree, "agent-b", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Provider != ProviderActiveCheckout || resumed.RepositoryBindings[0].LocalPath != first.RepositoryBindings[0].LocalPath {
+		t.Fatalf("existing task provider changed after preference update: first=%#v resumed=%#v", first, resumed)
+	}
+}
+
+func TestManagerActiveCheckoutBlocksConcurrentTasksOnSameRepository(t *testing.T) {
+	ctx := context.Background()
+	repo := makeTaskRepo(t)
+	manager := NewManager(NewStore(filepath.Join(t.TempDir(), "state")), NewLocalWorktreeProvider(filepath.Join(t.TempDir(), "worktrees")))
+
+	firstReq := PrepareRequest{TaskID: "task-live-a", WorkspaceKey: "workspace", Repositories: []repository.Checkout{repo}}
+	if _, err := manager.Ensure(ctx, firstReq, ProviderActiveCheckout, "agent-a", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+
+	secondReq := PrepareRequest{TaskID: "task-live-b", WorkspaceKey: "workspace", Repositories: []repository.Checkout{repo}}
+	if _, err := manager.Ensure(ctx, secondReq, ProviderActiveCheckout, "agent-b", time.Minute); !errors.Is(err, ErrActiveCheckoutBusy) {
+		t.Fatalf("second live task must not share authoritative checkout: %v", err)
+	}
+
+	safeReq := PrepareRequest{TaskID: "task-safe", WorkspaceKey: "workspace", Repositories: []repository.Checkout{repo}}
+	if _, err := manager.Ensure(ctx, safeReq, ProviderLocalWorktree, "agent-safe", time.Minute); err != nil {
+		t.Fatalf("safe worktree should remain independent from live checkout lease: %v", err)
+	}
+
+	if _, err := manager.Release(firstReq.WorkspaceKey, firstReq.TaskID, "agent-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Ensure(ctx, secondReq, ProviderActiveCheckout, "agent-b", time.Minute); err != nil {
+		t.Fatalf("released live checkout should be reusable: %v", err)
+	}
+}
+
 func TestManagerExpandsRepositoryCoverageWithoutReplacingExistingBinding(t *testing.T) {
 	ctx := context.Background()
 	firstRepo := makeTaskRepo(t)

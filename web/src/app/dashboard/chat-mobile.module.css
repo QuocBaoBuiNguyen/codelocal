@@ -38,7 +38,9 @@
   .topBarAction:disabled { opacity: 0.4; }
   .topBarAction:hover, .topBarAction:focus-visible { background: rgba(255, 255, 255, 0.07); }
 
-  .threadContext { min-width: 0; display: grid; gap: 2px; text-align: center; }
+  .threadContext { min-width: 0; display: grid; gap: 2px; padding: 4px 8px; border: 0; border-radius: 10px; background: transparent; color: inherit; font: inherit; text-align: center; cursor: pointer; }
+  .threadContext:hover:not(:disabled), .threadContext:focus-visible { background: rgba(255, 255, 255, 0.06); }
+  .threadContext:disabled { opacity: 0.55; cursor: default; }
   .threadContext strong,
   .threadContext span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .threadContext strong { color: rgba(246, 246, 248, 0.96); font-size: 14px; font-weight: 620; }

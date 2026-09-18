@@ -11,20 +11,21 @@ type ChatTopBarProps = {
   disabled: boolean;
   menuRef: React.RefObject<HTMLButtonElement | null>;
   onOpenMenu: () => void;
+  onOpenTaskSetup: () => void;
   onNewThread: () => void;
 };
 
-export function ChatTopBar({ drawerOpen, title, subtitle, disabled, menuRef, onOpenMenu, onNewThread }: ChatTopBarProps) {
+export function ChatTopBar({ drawerOpen, title, subtitle, disabled, menuRef, onOpenMenu, onOpenTaskSetup, onNewThread }: ChatTopBarProps) {
   const { t } = useTranslations();
   return (
     <header className={styles.topBar}>
       <button ref={menuRef} className={styles.topBarAction} type="button" onClick={onOpenMenu} aria-label={t("Open task list")} aria-expanded={drawerOpen}>
         <AppIcon name="menu" size={20} />
       </button>
-      <div className={styles.threadContext}>
+      <button className={styles.threadContext} type="button" onClick={onOpenTaskSetup} disabled={disabled} aria-label={t("Open project and execution setup")}>
         <strong title={title}>{title}</strong>
         <span title={subtitle}>{subtitle}</span>
-      </div>
+      </button>
       <button className={styles.topBarAction} type="button" onClick={onNewThread} disabled={disabled} aria-label={t("Create new task")}>
         <AppIcon name="plus" size={21} />
       </button>

@@ -136,7 +136,7 @@ func (s *Store) UpdateDashboardChatThreadMeta(ctx context.Context, userID, threa
 	if workspaceKey != "" {
 		wk = workspaceKey
 	}
-	_, err := s.DB.Exec(ctx, `UPDATE codelocal_dashboard_chat_thread SET model=$1, workspace_key=$2, updated_at=$3 WHERE id=$4 AND user_id=$5`, model, wk, now, threadID, userID)
+	_, err := s.DB.Exec(ctx, `UPDATE codelocal_dashboard_chat_thread SET model=$1, workspace_key=CASE WHEN workspace_key IS NULL OR workspace_key='' THEN $2 ELSE workspace_key END, updated_at=$3 WHERE id=$4 AND user_id=$5`, model, wk, now, threadID, userID)
 	return err
 }
 

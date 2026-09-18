@@ -25,6 +25,7 @@ type taskExecutionTarget struct {
 	OwnerID        string
 	Repository     repository.Checkout
 	Binding        taskexecution.RepositoryBinding
+	Provider       taskexecution.Provider
 	FS             *localfs.FS
 	RepositoryPath string
 	Active         bool
@@ -57,7 +58,7 @@ func taskExecutionMetadata(target taskExecutionTarget) map[string]any {
 	}
 	return map[string]any{
 		"taskId":         target.TaskID,
-		"provider":       string(taskexecution.ProviderLocalWorktree),
+		"provider":       string(target.Provider),
 		"repositoryId":   target.Repository.ID,
 		"repositoryPath": target.Repository.RelativePath,
 	}
@@ -87,7 +88,7 @@ func (e *Engine) taskExecutionTargetForPath(ctx context.Context, args map[string
 	repo, repoPath, err := e.Repositories.ResolvePath(workspacePath)
 	if err != nil {
 		if prepare {
-			return taskExecutionTarget{}, errors.New("isolated task mutation requires a path owned by a discovered Git repository")
+			return taskExecutionTarget{}, errors.New("task execution mutation requires a path owned by a discovered Git repository")
 		}
 		return taskExecutionTarget{TaskID: taskID, OwnerID: ownerID, FS: e.FS, RepositoryPath: workspacePath}, nil
 	}
@@ -96,10 +97,10 @@ func (e *Engine) taskExecutionTargetForPath(ctx context.Context, args map[string
 		return taskExecutionTarget{}, err
 	}
 	if prepare {
-		bundle, err = e.TaskExecutions.EnsureLocal(ctx, taskexecution.PrepareRequest{
+		bundle, err = e.TaskExecutions.Ensure(ctx, taskexecution.PrepareRequest{
 			TaskID: taskID, WorkspaceID: e.WorkspaceID, WorkspaceKey: e.WorkspaceKey,
 			Repositories: []repository.Checkout{repo},
-		}, ownerID, 2*time.Minute)
+		}, e.TaskExecutionProvider(), ownerID, 2*time.Minute)
 		if err != nil {
 			return taskExecutionTarget{}, err
 		}
@@ -116,7 +117,7 @@ func (e *Engine) taskExecutionTargetForPath(ctx context.Context, args map[string
 	if err != nil {
 		return taskExecutionTarget{}, err
 	}
-	return taskExecutionTarget{TaskID: taskID, OwnerID: ownerID, Repository: repo, Binding: binding, FS: fs, RepositoryPath: repoPath, Active: true}, nil
+	return taskExecutionTarget{TaskID: taskID, OwnerID: ownerID, Repository: repo, Binding: binding, Provider: bundle.Provider, FS: fs, RepositoryPath: repoPath, Active: true}, nil
 }
 
 func (e *Engine) taskReadFile(ctx context.Context, args map[string]any, opts HandleOptions, path string, startLine, endLine int) (map[string]any, error) {
@@ -195,7 +196,7 @@ func (e *Engine) taskApplyEdits(ctx context.Context, args map[string]any, opts H
 			return nil, err
 		}
 		if target.Repository.ID != first.Repository.ID || target.Repository.RelativePath != first.Repository.RelativePath {
-			return nil, errors.New("task-isolated apply_edits must target one repository per call; split cross-repository edits into separate calls")
+			return nil, errors.New("task execution apply_edits must target one repository per call; split cross-repository edits into separate calls")
 		}
 		workspacePaths = append(workspacePaths, file.Path)
 		file.Path = target.RepositoryPath
@@ -291,7 +292,7 @@ func (e *Engine) taskApplyPatch(ctx context.Context, args map[string]any, opts H
 			return nil, err
 		}
 		if target.Repository.ID != first.Repository.ID || target.Repository.RelativePath != first.Repository.RelativePath {
-			return nil, errors.New("task-isolated apply_patch must target one repository per call; split cross-repository patches")
+			return nil, errors.New("task execution apply_patch must target one repository per call; split cross-repository patches")
 		}
 	}
 	result, err := editing.New(first.FS).ApplyPatch(rewritePatchForRepository(patch, first.Repository.RelativePath))
@@ -330,10 +331,14 @@ func taskFormatter(root, relative string) (string, []string) {
 
 func (e *Engine) taskFormatFiles(ctx context.Context, args map[string]any, opts HandleOptions, paths []string) (map[string]any, error) {
 	formatted, skipped := []string{}, []map[string]any{}
+	provider := taskexecution.ProviderLocalWorktree
 	for _, path := range paths {
 		target, err := e.taskExecutionTargetForPath(ctx, args, opts, path, true)
 		if err != nil {
 			return nil, err
+		}
+		if target.Active {
+			provider = target.Provider
 		}
 		if _, err := target.FS.Existing(target.RepositoryPath); err != nil {
 			return nil, err
@@ -350,7 +355,7 @@ func (e *Engine) taskFormatFiles(ctx context.Context, args map[string]any, opts 
 		}
 		formatted = append(formatted, filepath.ToSlash(filepath.Clean(path)))
 	}
-	return map[string]any{"formatted": formatted, "skipped": skipped, "taskExecution": map[string]any{"taskId": asString(args[privateTaskExecutionID]), "provider": string(taskexecution.ProviderLocalWorktree)}}, nil
+	return map[string]any{"formatted": formatted, "skipped": skipped, "taskExecution": map[string]any{"taskId": asString(args[privateTaskExecutionID]), "provider": string(provider)}}, nil
 }
 
 func (e *Engine) taskPreflight(args map[string]any, opts HandleOptions) (map[string]any, error) {
@@ -412,7 +417,7 @@ func (e *Engine) taskExecutionBindingForCWD(ctx context.Context, args map[string
 				if err != nil {
 					return taskExecutionTarget{}, "", err
 				}
-				target := taskExecutionTarget{TaskID: taskID, OwnerID: ownerID, Repository: repo, Binding: binding, FS: fs, RepositoryPath: ".", Active: true}
+				target := taskExecutionTarget{TaskID: taskID, OwnerID: ownerID, Repository: repo, Binding: binding, Provider: bundle.Provider, FS: fs, RepositoryPath: ".", Active: true}
 				return target, fs.Root, nil
 			}
 		}

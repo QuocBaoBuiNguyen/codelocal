@@ -38,6 +38,7 @@ var runtimeOperationIDs = map[string]string{
 	"select_workspace":       "workspace.select",
 	"workspace_info":         "workspace.info",
 	"approval_mode":          "workspace.access",
+	"execution_mode":         "workspace.execution",
 	"memory_remember":        "memory.remember",
 	"memory_recall":          "memory.recall",
 	"learned_skill_list":     "skills.list",
@@ -170,7 +171,7 @@ func runtimeOperationID(name string) (string, bool) {
 
 func localOperationTool(name string) bool {
 	switch name {
-	case "list_devices", "list_device_identities", "revoke_device", "rename_device", "list_workspaces", "select_workspace", "workspace_info", "memory_remember", "memory_recall":
+	case "list_devices", "list_device_identities", "revoke_device", "rename_device", "list_workspaces", "select_workspace", "workspace_info", "execution_mode", "memory_remember", "memory_recall":
 		return true
 	default:
 		return false
@@ -191,7 +192,7 @@ func runtimeToolMutatesState(name string) bool {
 		return true
 	}
 	switch name {
-	case "select_workspace", "approval_mode", "memory_remember", "revoke_device", "rename_device", "artifact_publish", "exec_write", "pty_write", "process_write", "exec_signal", "pty_signal", "exec_kill", "pty_kill", "process_kill":
+	case "select_workspace", "approval_mode", "execution_mode", "memory_remember", "revoke_device", "rename_device", "artifact_publish", "exec_write", "pty_write", "process_write", "exec_signal", "pty_signal", "exec_kill", "pty_kill", "process_kill":
 		return true
 	default:
 		return false
@@ -220,7 +221,7 @@ func runtimeToolOpenWorld(name string) bool {
 
 func runtimeToolIdempotent(name string) bool {
 	switch name {
-	case "select_workspace", "approval_mode", "memory_remember", "write_file", "artifact_publish", "git_stage", "git_unstage", "approval_reset", "revoke_device":
+	case "select_workspace", "approval_mode", "execution_mode", "memory_remember", "write_file", "artifact_publish", "git_stage", "git_unstage", "approval_reset", "revoke_device":
 		return true
 	default:
 		return false

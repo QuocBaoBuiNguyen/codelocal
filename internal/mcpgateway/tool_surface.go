@@ -13,12 +13,12 @@ import (
 )
 
 // PublicToolSurfaceVersion is the compatibility generation of the public MCP
-// contract. Generation 7 keeps the compact 14-tool catalog and adds durable
-// video artifact publishing through terminal(action=publish_artifact). Bump the
-// generation whenever a public tool schema changes so AI hosts invalidate cached
-// tools/list catalogs. Older calls remain translatable.
+// contract. Generation 8 keeps the compact 14-tool catalog and adds the
+// workspace execution choice (Safe Workspace / Live Project) without adding a
+// new public tool. Bump the generation whenever a public tool schema changes so
+// AI hosts invalidate cached tools/list catalogs. Older calls remain translatable.
 const (
-	PublicToolSurfaceVersion = 7
+	PublicToolSurfaceVersion = 8
 
 	// Version 1.5.16 was the generation-2 MCP identity. Keep the same release
 	// line and derive the patch from the surface generation so every future
@@ -224,8 +224,10 @@ func toolSurfaceSummary() string {
 // older generations do not drift.
 const sessionlessWorkspaceRoutingInstructions = `Workspace routing: when the project is known, pass workspaceKey explicitly; explicit workspaceKey always wins, followed by the current stateful session selection. If neither exists, CodeLocal may use a user-saved default workspace; otherwise it auto-selects only when intent is unambiguous (exactly one active operator workspace, or one sleeping workspace when none is active). CodeLocal never chooses between multiple projects using recency/LastSeenAt and never implicitly routes to managed system projects. When selectionRequired is returned, call workspace(action=list) to inspect candidates and ask the user which workspace to use. Call workspace(action=select,key=...) for the current conversation; set makeDefault=true only when the user explicitly wants that choice remembered across future sessions. Workspace routing never changes the workspace access/approval mode.`
 
+const executionModeChoiceInstructions = `Execution choice: before the first coding mutation in a workspace, call workspace(action=execution,workspaceKey=...). If configured=false, Safe Workspace remains the non-destructive default but ask the user once to choose Safe Workspace (isolated checkout, recommended) or Live Project (edit the active checkout directly). Persist only the user's explicit choice with workspace(action=execution,executionMode=safe|live,...). Never auto-switch execution mode. When configured=true, reuse the saved workspace choice without asking again.`
+
 func publicMCPInstructions() string {
-	return compactOrchestrationInstructions + "\n\n" + sessionlessWorkspaceRoutingInstructions + "\n\nCompatibility: " + toolSurfaceSummary() + ". Legacy tool calls that CodeLocal can translate remain supported without user action. Only CODELOCAL_TOOL_SCHEMA_MISMATCH means the client requested a contract CodeLocal cannot translate."
+	return compactOrchestrationInstructions + "\n\n" + sessionlessWorkspaceRoutingInstructions + "\n\n" + executionModeChoiceInstructions + "\n\nCompatibility: " + toolSurfaceSummary() + ". Legacy tool calls that CodeLocal can translate remain supported without user action. Only CODELOCAL_TOOL_SCHEMA_MISMATCH means the client requested a contract CodeLocal cannot translate."
 }
 
 func staleToolSchemaNotice(originalTool string) string {

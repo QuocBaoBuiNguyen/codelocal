@@ -336,7 +336,7 @@ func compactToolDefinitions() []compactToolDef {
 	limit := integer("Maximum results.", 1, 2000)
 
 	workspaceActions := map[string]string{
-		"list": "list_workspaces", "select": "select_workspace", "info": "workspace_info", "access": "approval_mode",
+		"list": "list_workspaces", "select": "select_workspace", "info": "workspace_info", "access": "approval_mode", "execution": "execution_mode",
 		"remember": "memory_remember", "recall": "memory_recall", "skills": "learned_skill_list",
 		"devices": "list_devices", "paired_devices": "list_device_identities", "rename_device": "rename_device", "revoke_device": "revoke_device",
 		"approvals": "approval_list", "revoke_approval": "approval_revoke", "reset_approvals": "approval_reset",
@@ -344,20 +344,21 @@ func compactToolDefinitions() []compactToolDef {
 	}
 	workspace := byName["workspace"]
 	workspace.Title = "Manage CodeLocal workspace and runtime"
-	workspace.Description = "Manage workspaces, access, durable memory, learned skills, paired devices, remembered approvals, and execution-security diagnostics through one runtime-scoped tool. Device revocation and approval changes remain policy-controlled."
+	workspace.Description = "Manage workspaces, access, Safe Workspace / Live Project execution choice, durable memory, learned skills, paired devices, remembered approvals, and execution-security diagnostics through one runtime-scoped tool. Device revocation and approval changes remain policy-controlled."
 	workspace.Schema = actionSchema(
-		[]string{"list", "select", "info", "access", "remember", "recall", "skills", "devices", "paired_devices", "rename_device", "revoke_device", "approvals", "revoke_approval", "reset_approvals", "security", "security_smoke_test"},
+		[]string{"list", "select", "info", "access", "execution", "remember", "recall", "skills", "devices", "paired_devices", "rename_device", "revoke_device", "approvals", "revoke_approval", "reset_approvals", "security", "security_smoke_test"},
 		map[string]any{
-			"key":          str("Workspace key returned by action=list."),
-			"makeDefault":  boolean("For action=select, persist this workspace as the user's default across future MCP sessions. Set true only when the user explicitly asks to remember the choice."),
-			"mode":         map[string]any{"type": "string", "enum": []string{"prompt", "smart", "full"}, "description": "Access mode for action=access."},
-			"query":        str("Focused natural-language memory query for action=recall."),
-			"limit":        integer("Maximum recalled memories or learned skills.", 1, 20),
-			"memories":     schemaProperty(byName["workspace"].Schema, "memories"),
-			"credentialId": str("Paired device credential ID."),
-			"deviceName":   str("New device name."),
-			"id":           str("Remembered approval ID."),
-			"actionKey":    str("Structured approval action key."),
+			"key":           str("Workspace key returned by action=list."),
+			"makeDefault":   boolean("For action=select, persist this workspace as the user's default across future MCP sessions. Set true only when the user explicitly asks to remember the choice."),
+			"mode":          map[string]any{"type": "string", "enum": []string{"prompt", "smart", "full"}, "description": "Access mode for action=access."},
+			"executionMode": map[string]any{"type": "string", "enum": []string{"safe", "live"}, "description": "For action=execution: safe = Safe Workspace (isolated, recommended/default); live = Live Project (edit the active checkout). Omit to inspect the current choice."},
+			"query":         str("Focused natural-language memory query for action=recall."),
+			"limit":         integer("Maximum recalled memories or learned skills.", 1, 20),
+			"memories":      schemaProperty(byName["workspace"].Schema, "memories"),
+			"credentialId":  str("Paired device credential ID."),
+			"deviceName":    str("New device name."),
+			"id":            str("Remembered approval ID."),
+			"actionKey":     str("Structured approval action key."),
 		},
 	)
 	workspace.Annotations = compactAnnotations("Manage CodeLocal workspace and runtime", false, true, false)

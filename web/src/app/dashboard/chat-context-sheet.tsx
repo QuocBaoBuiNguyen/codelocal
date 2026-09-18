@@ -113,7 +113,7 @@ export function ChatContextSheet({
             <legend>{t("Project")}</legend>
             <label className={selectedWorkspaceKey === "auto" ? styles.selectedCard : undefined}>
               <input type="radio" name="mobile-project" value="auto" checked={selectedWorkspaceKey === "auto"} onChange={(event) => onWorkspaceChange(event.target.value)} />
-              <span><strong>{t("Auto")}</strong><small>{t("CodeLocal chooses the most relevant project automatically")}</small></span>
+              <span><strong>{t("General")}</strong><small>{t("Chat without a project or coding workspace.")}</small></span>
             </label>
             {workspaceItems.map((workspace) => {
               const key = workspaceKey(workspace);
@@ -124,6 +124,7 @@ export function ChatContextSheet({
               </label>;
             })}
             <Link className={styles.manageProjects} href="/dashboard/workspaces">{t("Manage projects")} <AppIcon name="chevron-right" size={16} /></Link>
+            <p className={styles.contextModeHelp}>{t("Switching project or execution mode starts a new task.")}</p>
           </fieldset>
 
           <fieldset className={styles.modeField}>

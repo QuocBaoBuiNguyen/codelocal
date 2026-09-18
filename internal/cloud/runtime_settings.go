@@ -27,6 +27,13 @@ const (
 	RuntimeScopeSession   RuntimeScope = "session"
 )
 
+type RuntimeExecutionMode string
+
+const (
+	RuntimeExecutionSafe RuntimeExecutionMode = "safe"
+	RuntimeExecutionLive RuntimeExecutionMode = "live"
+)
+
 type RuntimeSecretRef struct {
 	Configured bool `json:"configured"`
 }
@@ -51,19 +58,23 @@ type RuntimeSystemProject struct {
 }
 
 type RuntimeConfigLayer struct {
-	Scope          RuntimeScope                `json:"scope"`
-	Values         map[string]string           `json:"values,omitempty"`
-	Secrets        map[string]RuntimeSecretRef `json:"secrets,omitempty"`
-	SystemProjects []RuntimeSystemProject      `json:"systemProjects,omitempty"`
-	UpdatedAt      int64                       `json:"updatedAt,omitempty"`
+	Scope                   RuntimeScope                `json:"scope"`
+	ExecutionMode           RuntimeExecutionMode        `json:"executionMode,omitempty"`
+	ExecutionModeConfigured bool                        `json:"executionModeConfigured,omitempty"`
+	Values                  map[string]string           `json:"values,omitempty"`
+	Secrets                 map[string]RuntimeSecretRef `json:"secrets,omitempty"`
+	SystemProjects          []RuntimeSystemProject      `json:"systemProjects,omitempty"`
+	UpdatedAt               int64                       `json:"updatedAt,omitempty"`
 }
 
 type RuntimeConfigSnapshot struct {
-	Values         map[string]string           `json:"values,omitempty"`
-	Secrets        map[string]RuntimeSecretRef `json:"secrets,omitempty"`
-	SystemProjects []RuntimeSystemProject      `json:"systemProjects,omitempty"`
-	Version        int64                       `json:"version"`
-	UpdatedAt      int64                       `json:"updatedAt"`
+	ExecutionMode           RuntimeExecutionMode        `json:"executionMode"`
+	ExecutionModeConfigured bool                        `json:"executionModeConfigured"`
+	Values                  map[string]string           `json:"values,omitempty"`
+	Secrets                 map[string]RuntimeSecretRef `json:"secrets,omitempty"`
+	SystemProjects          []RuntimeSystemProject      `json:"systemProjects,omitempty"`
+	Version                 int64                       `json:"version"`
+	UpdatedAt               int64                       `json:"updatedAt"`
 }
 
 type RuntimeMaterializedConfig struct {
@@ -89,6 +100,12 @@ CREATE TABLE IF NOT EXISTS codelocal_runtime_config (
  )
 );`
 
+const runtimeExecutionModeMigrationSQL = `
+ALTER TABLE codelocal_runtime_config
+ ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'safe'
+ CHECK (execution_mode IN ('safe','live')),
+ ADD COLUMN IF NOT EXISTS execution_mode_configured BOOLEAN NOT NULL DEFAULT FALSE;`
+
 const runtimeSecretsMigrationSQL = `
 CREATE TABLE IF NOT EXISTS codelocal_runtime_secrets (
  user_id TEXT NOT NULL REFERENCES codelocal_users(id) ON DELETE CASCADE,
@@ -107,10 +124,25 @@ CREATE TABLE IF NOT EXISTS codelocal_runtime_secrets (
  )
 );`
 
+func ValidRuntimeExecutionMode(mode RuntimeExecutionMode) bool {
+	return mode == RuntimeExecutionSafe || mode == RuntimeExecutionLive
+}
+
+func NormalizeRuntimeExecutionMode(mode RuntimeExecutionMode) RuntimeExecutionMode {
+	if mode == RuntimeExecutionLive {
+		return RuntimeExecutionLive
+	}
+	return RuntimeExecutionSafe
+}
+
 func MergeRuntimeConfig(layers ...RuntimeConfigLayer) RuntimeConfigSnapshot {
-	out := RuntimeConfigSnapshot{Values: map[string]string{}, Secrets: map[string]RuntimeSecretRef{}}
+	out := RuntimeConfigSnapshot{ExecutionMode: RuntimeExecutionSafe, Values: map[string]string{}, Secrets: map[string]RuntimeSecretRef{}}
 	projects := map[string]RuntimeSystemProject{}
 	for _, layer := range layers {
+		if layer.Scope == RuntimeScopeWorkspace {
+			out.ExecutionMode = NormalizeRuntimeExecutionMode(layer.ExecutionMode)
+			out.ExecutionModeConfigured = layer.ExecutionModeConfigured
+		}
 		for key, value := range layer.Values {
 			if key = strings.TrimSpace(key); key != "" {
 				out.Values[key] = value
@@ -237,9 +269,9 @@ func (s *Store) RuntimeSettingsLayer(ctx context.Context, userID string, scope R
 	if err != nil {
 		return RuntimeConfigLayer{}, err
 	}
-	layer := RuntimeConfigLayer{Scope: scope, Values: map[string]string{}, Secrets: map[string]RuntimeSecretRef{}}
+	layer := RuntimeConfigLayer{Scope: scope, ExecutionMode: RuntimeExecutionSafe, Values: map[string]string{}, Secrets: map[string]RuntimeSecretRef{}}
 	var configRaw, projectsRaw []byte
-	err = s.DB.QueryRow(ctx, `SELECT config,system_projects,updated_at FROM codelocal_runtime_config WHERE user_id=$1 AND scope=$2 AND device_id=$3 AND workspace_id=$4`, userID, scopeValue, deviceID, workspaceID).Scan(&configRaw, &projectsRaw, &layer.UpdatedAt)
+	err = s.DB.QueryRow(ctx, `SELECT config,system_projects,execution_mode,execution_mode_configured,updated_at FROM codelocal_runtime_config WHERE user_id=$1 AND scope=$2 AND device_id=$3 AND workspace_id=$4`, userID, scopeValue, deviceID, workspaceID).Scan(&configRaw, &projectsRaw, &layer.ExecutionMode, &layer.ExecutionModeConfigured, &layer.UpdatedAt)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return layer, err
 	}
@@ -275,7 +307,13 @@ func (s *Store) PutRuntimeSettingsLayer(ctx context.Context, userID string, laye
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.Exec(ctx, `INSERT INTO codelocal_runtime_config(user_id,scope,device_id,workspace_id,config,system_projects,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(user_id,scope,device_id,workspace_id) DO UPDATE SET config=EXCLUDED.config,system_projects=EXCLUDED.system_projects,updated_at=EXCLUDED.updated_at`, userID, scope, deviceID, workspaceID, values, projects, time.Now().UnixMilli())
+	executionMode := RuntimeExecutionSafe
+	executionModeConfigured := false
+	if layer.Scope == RuntimeScopeWorkspace {
+		executionMode = NormalizeRuntimeExecutionMode(layer.ExecutionMode)
+		executionModeConfigured = layer.ExecutionModeConfigured
+	}
+	_, err = s.DB.Exec(ctx, `INSERT INTO codelocal_runtime_config(user_id,scope,device_id,workspace_id,config,system_projects,execution_mode,execution_mode_configured,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(user_id,scope,device_id,workspace_id) DO UPDATE SET config=EXCLUDED.config,system_projects=EXCLUDED.system_projects,execution_mode=EXCLUDED.execution_mode,execution_mode_configured=EXCLUDED.execution_mode_configured,updated_at=EXCLUDED.updated_at`, userID, scope, deviceID, workspaceID, values, projects, executionMode, executionModeConfigured, time.Now().UnixMilli())
 	return err
 }
 

@@ -39,30 +39,31 @@ import (
 )
 
 type Engine struct {
-	Root           string
-	WorkspaceID    string
-	WorkspaceName  string
-	WorkspaceKey   string
-	DeviceID       string
-	ShellEnabled   bool
-	ApprovalMode   string
-	FS             *localfs.FS
-	Project        *project.Engine
-	Repositories   *repository.Registry
-	TaskExecutions *taskexecution.Manager
-	Editing        *editing.Engine
-	Processes      *processmgr.Manager
-	Approvals      *approval.Memory
-	Broker         *approval.Broker
-	History        *history.Terminal
-	Journal        *idempotency.Journal
-	MCP            *mcphub.Hub
-	Skills         *learnedskills.Store
-	mu             sync.Mutex
-	baselines      map[string][]map[string]any
-	runtimeEnv     map[string]string
-	runtimeSecrets map[string]string
-	runtimeRedact  []string
+	Root                  string
+	WorkspaceID           string
+	WorkspaceName         string
+	WorkspaceKey          string
+	DeviceID              string
+	ShellEnabled          bool
+	ApprovalMode          string
+	FS                    *localfs.FS
+	Project               *project.Engine
+	Repositories          *repository.Registry
+	TaskExecutions        *taskexecution.Manager
+	taskExecutionProvider taskexecution.Provider
+	Editing               *editing.Engine
+	Processes             *processmgr.Manager
+	Approvals             *approval.Memory
+	Broker                *approval.Broker
+	History               *history.Terminal
+	Journal               *idempotency.Journal
+	MCP                   *mcphub.Hub
+	Skills                *learnedskills.Store
+	mu                    sync.Mutex
+	baselines             map[string][]map[string]any
+	runtimeEnv            map[string]string
+	runtimeSecrets        map[string]string
+	runtimeRedact         []string
 }
 
 type HandleOptions struct{ RequestID, SessionID, IdempotencyKey string }
@@ -78,7 +79,7 @@ func New(root, workspaceID, workspaceName, workspaceKey, deviceID string) (*Engi
 	shellEnabled := os.Getenv("CODELOCAL_ALLOW_SHELL") != "0"
 	approvalMode := string(approval.ResolveMode(workspaceID))
 	repositories := repository.New(fs.Root, workspaceName)
-	engine := &Engine{Root: fs.Root, WorkspaceID: workspaceID, WorkspaceName: workspaceName, WorkspaceKey: workspaceKey, DeviceID: deviceID, ShellEnabled: shellEnabled, ApprovalMode: approvalMode, FS: fs, Project: project.NewWithRepositories(fs, repositories), Repositories: repositories, TaskExecutions: taskexecution.NewManager(nil, nil), Editing: editing.New(fs), Approvals: approvals, Broker: broker, History: terminalHistory, Journal: idempotency.New(workspaceKey), Skills: learnedskills.New(), baselines: map[string][]map[string]any{}, runtimeEnv: map[string]string{}, runtimeSecrets: map[string]string{}}
+	engine := &Engine{Root: fs.Root, WorkspaceID: workspaceID, WorkspaceName: workspaceName, WorkspaceKey: workspaceKey, DeviceID: deviceID, ShellEnabled: shellEnabled, ApprovalMode: approvalMode, FS: fs, Project: project.NewWithRepositories(fs, repositories), Repositories: repositories, TaskExecutions: taskexecution.NewManager(nil, nil), taskExecutionProvider: taskexecution.ProviderLocalWorktree, Editing: editing.New(fs), Approvals: approvals, Broker: broker, History: terminalHistory, Journal: idempotency.New(workspaceKey), Skills: learnedskills.New(), baselines: map[string][]map[string]any{}, runtimeEnv: map[string]string{}, runtimeSecrets: map[string]string{}}
 	engine.Processes = processmgr.NewManager(fs.Root, workspaceKey, func(record *processmgr.Record, stream, value string) {}, func(record *processmgr.Record) {
 		_, _ = terminalHistory.Finished(record)
 		engine.Project.Invalidate()
@@ -98,6 +99,24 @@ func New(root, workspaceID, workspaceName, workspaceKey, deviceID string) (*Engi
 	})
 	engine.MCP = mcpHub
 	return engine, nil
+}
+
+func (e *Engine) SetTaskExecutionProvider(provider taskexecution.Provider) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if provider != taskexecution.ProviderActiveCheckout {
+		provider = taskexecution.ProviderLocalWorktree
+	}
+	e.taskExecutionProvider = provider
+}
+
+func (e *Engine) TaskExecutionProvider() taskexecution.Provider {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.taskExecutionProvider == taskexecution.ProviderActiveCheckout {
+		return taskexecution.ProviderActiveCheckout
+	}
+	return taskexecution.ProviderLocalWorktree
 }
 
 func (e *Engine) SetRuntimeEnvironment(values, secrets map[string]string) {
@@ -1209,6 +1228,30 @@ func (e *Engine) handle(ctx context.Context, tool string, args map[string]any, o
 			"mode": approval.UserMode(mode), "label": approval.UserModeLabel(mode), "scope": "workspace",
 			"persistsAcrossSessions": true,
 			"choices":                approval.UserModeChoices(),
+		}, nil
+	case "execution_mode":
+		requested := strings.TrimSpace(asString(args["mode"]))
+		if requested != "" {
+			switch requested {
+			case "safe":
+				e.SetTaskExecutionProvider(taskexecution.ProviderLocalWorktree)
+			case "live":
+				e.SetTaskExecutionProvider(taskexecution.ProviderActiveCheckout)
+			default:
+				return nil, errors.New("execution mode must be one of: safe, live")
+			}
+		}
+		provider := e.TaskExecutionProvider()
+		mode := "safe"
+		if provider == taskexecution.ProviderActiveCheckout {
+			mode = "live"
+		}
+		return map[string]any{
+			"mode": mode, "provider": string(provider), "scope": "workspace",
+			"choices": []map[string]any{
+				{"mode": "safe", "label": "Safe Workspace", "recommended": true},
+				{"mode": "live", "label": "Live Project", "recommended": false},
+			},
 		}, nil
 	case "project_map":
 		return e.Project.Map(asBool(args["force"], false))

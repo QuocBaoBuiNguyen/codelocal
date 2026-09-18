@@ -34,6 +34,27 @@ type dashboardChatWorkspace struct {
 	WorkspaceName string `json:"workspaceName"`
 }
 
+func dashboardChatWorkspaceKeyValue(workspace *dashboardChatWorkspace) string {
+	if workspace == nil || strings.TrimSpace(workspace.WorkspaceID) == "" {
+		return ""
+	}
+	return strings.TrimSpace(workspace.DeviceID) + "::" + strings.TrimSpace(workspace.WorkspaceID)
+}
+
+func dashboardChatWorkspaceFromKey(value string) *dashboardChatWorkspace {
+	parts := strings.SplitN(strings.TrimSpace(value), "::", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return nil
+	}
+	return &dashboardChatWorkspace{DeviceID: strings.TrimSpace(parts[0]), WorkspaceID: strings.TrimSpace(parts[1])}
+}
+
+func dashboardChatThreadWorkspaceConflict(boundKey, requestedKey string) bool {
+	boundKey = strings.TrimSpace(boundKey)
+	requestedKey = strings.TrimSpace(requestedKey)
+	return boundKey != "" && requestedKey != "" && boundKey != requestedKey
+}
+
 type dashboardChatImageMeta struct {
 	ImageRef    string `json:"imageRef"`
 	SHA256      string `json:"sha256"`
@@ -741,9 +762,25 @@ func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
 		webutil.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "thread_unavailable"})
 		return
 	}
-	workspaceKeyForThread := ""
-	if req.Workspace != nil && strings.TrimSpace(req.Workspace.WorkspaceID) != "" {
-		workspaceKeyForThread = strings.TrimSpace(req.Workspace.DeviceID) + "::" + strings.TrimSpace(req.Workspace.WorkspaceID)
+	thread, err := s.Store.GetDashboardChatThread(r.Context(), identity.User.ID, effectiveThreadID)
+	if err != nil {
+		webutil.JSON(w, http.StatusServiceUnavailable, map[string]string{"error": "thread_unavailable"})
+		return
+	}
+	workspaceKeyForThread := dashboardChatWorkspaceKeyValue(req.Workspace)
+	boundWorkspaceKey := strings.TrimSpace(thread.WorkspaceKey)
+	if dashboardChatThreadWorkspaceConflict(boundWorkspaceKey, workspaceKeyForThread) {
+		webutil.JSON(w, http.StatusConflict, map[string]string{"error": "thread_workspace_locked", "workspaceKey": boundWorkspaceKey})
+		return
+	}
+	if boundWorkspaceKey != "" && workspaceKeyForThread == "" {
+		boundWorkspace := dashboardChatWorkspaceFromKey(boundWorkspaceKey)
+		if boundWorkspace == nil {
+			webutil.JSON(w, http.StatusConflict, map[string]string{"error": "thread_workspace_invalid"})
+			return
+		}
+		req.Workspace = boundWorkspace
+		workspaceKeyForThread = boundWorkspaceKey
 	}
 	modelForThread := strings.TrimSpace(req.Model)
 	if modelForThread == "" {
@@ -752,7 +789,7 @@ func (s *Server) dashboardChatAPI(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.UpdateDashboardChatThreadMeta(r.Context(), identity.User.ID, effectiveThreadID, modelForThread, workspaceKeyForThread, nowMs); err != nil {
 		slog.Warn("dashboard chat thread metadata update failed", "error", err, "user", identity.User.ID, "thread", effectiveThreadID)
 	}
-	if thr, err := s.Store.GetDashboardChatThread(r.Context(), identity.User.ID, effectiveThreadID); err == nil && thr != nil && strings.TrimSpace(thr.Title) == "Cuộc trò chuyện mới" {
+	if strings.TrimSpace(thread.Title) == "Cuộc trò chuyện mới" {
 		title := cloud.DashboardChatAutoTitle(msg)
 		if title != "Cuộc trò chuyện mới" {
 			if err := s.Store.UpdateDashboardChatThreadTitle(r.Context(), identity.User.ID, effectiveThreadID, title, nowMs); err != nil {

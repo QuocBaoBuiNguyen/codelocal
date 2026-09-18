@@ -1405,6 +1405,9 @@ func (s *Service) callOperationRemembering(ctx context.Context, userID, publicTo
 		workspaceKey = strings.TrimSpace(s.route(userID, session))
 	}
 	if workspaceKey != "" && ruleGovernedMutation(operation) {
+		if selection, required := s.executionModeSelectionRequired(ctx, userID, workspaceKey); required {
+			return selection, nil
+		}
 		if refreshed, stop := s.refreshProjectBrainBeforeMutation(ctx, userID, session, workspaceKey, publicTool, operation, args, req); stop {
 			return refreshed, nil
 		}

@@ -13,6 +13,7 @@ import (
 
 	"github.com/0xmarkhydra/codelocal/internal/cloud"
 	"github.com/0xmarkhydra/codelocal/internal/mcpconfig"
+	"github.com/0xmarkhydra/codelocal/internal/taskexecution"
 )
 
 type runtimeConfigCache struct {
@@ -194,6 +195,13 @@ func runtimeConfigEnvironment(snapshot cloud.RuntimeConfigSnapshot) map[string]s
 	return out
 }
 
+func runtimeTaskExecutionProvider(snapshot cloud.RuntimeConfigSnapshot) taskexecution.Provider {
+	if snapshot.ExecutionMode == cloud.RuntimeExecutionLive {
+		return taskexecution.ProviderActiveCheckout
+	}
+	return taskexecution.ProviderLocalWorktree
+}
+
 func runtimeSecretRedactValues(secrets map[string]string) []string {
 	out := make([]string, 0, len(secrets))
 	for _, value := range secrets {
@@ -217,6 +225,7 @@ func (r *Runtime) applyRuntimeSettings(settings map[string]cloud.RuntimeMaterial
 		cache.Workspaces[workspaceID] = materialized.Snapshot
 		if worker := r.workers[workspaceID]; worker != nil && worker.Engine != nil {
 			worker.Engine.SetRuntimeEnvironment(runtimeConfigEnvironment(materialized.Snapshot), materialized.Secrets)
+			worker.Engine.SetTaskExecutionProvider(runtimeTaskExecutionProvider(materialized.Snapshot))
 			active[workspaceID] = worker
 		}
 	}

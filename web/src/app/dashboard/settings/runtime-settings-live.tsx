@@ -3,7 +3,7 @@
 import { type FormEvent, useState } from "react";
 import { isAccountResource } from "@/lib/contracts/account";
 import { isDevicesResource, isWorkspacesResource } from "@/lib/contracts/resources";
-import { isRuntimeSettingsResource, type RuntimeScope } from "@/lib/contracts/runtime-settings";
+import { isRuntimeSettingsResource, type RuntimeExecutionMode, type RuntimeScope } from "@/lib/contracts/runtime-settings";
 import { useTranslations } from "@/lib/i18n/provider";
 import type { MessageKey } from "@/lib/i18n/messages";
 import { AppIcon } from "../app-icon";
@@ -101,6 +101,10 @@ export function RuntimeSettingsLive() {
     }
   }
 
+  async function saveExecutionMode(mode: RuntimeExecutionMode) {
+    await mutate("/api/v1/runtime/settings/execution", { mode });
+  }
+
   async function addConfig(event: FormEvent) {
     event.preventDefault();
     if (!configKey.trim()) return;
@@ -185,6 +189,27 @@ export function RuntimeSettingsLive() {
         </div>
       ) : (
         <>
+          {scope === "workspace" && (
+            <section className={styles.executionPanel} aria-label={t("Execution Mode")}>
+              <header className={styles.executionHeader}>
+                <div className={styles.panelTitle}>
+                  <span className={styles.panelIcon}><AppIcon name="runtime" size={17} /></span>
+                  <div><h2>{t("Execution Mode")}</h2><p>{t("Choose how CodeLocal changes this project")}</p></div>
+                </div>
+              </header>
+              <div className={styles.executionChoices}>
+                <button type="button" disabled={saving} data-active={(settings.state.value.effective.executionMode ?? "safe") === "safe"} onClick={() => void saveExecutionMode("safe")}>
+                  <span className={styles.executionChoiceIcon}><AppIcon name="shield" size={18} /></span>
+                  <span><strong>{t("Safe Workspace")}</strong><small>{t("Work in an isolated copy. Recommended for most tasks.")}</small></span>
+                </button>
+                <button type="button" disabled={saving} data-active={(settings.state.value.effective.executionMode ?? "safe") === "live"} onClick={() => void saveExecutionMode("live")}>
+                  <span className={styles.executionChoiceIcon}><AppIcon name="runtime" size={18} /></span>
+                  <span><strong>{t("Live Project")}</strong><small>{t("Edit the current project directly. Best for debugging a running app.")}</small></span>
+                </button>
+              </div>
+            </section>
+          )}
+
           <div className={styles.settingsGrid}>
             <section className={styles.panel}>
               <header className={styles.panelHeader}>
