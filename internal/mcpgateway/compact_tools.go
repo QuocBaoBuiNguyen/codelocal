@@ -449,7 +449,7 @@ func compactToolDefinitions() []compactToolDef {
 		})
 	}
 
-	return []compactToolDef{
+	defs := []compactToolDef{
 		workspace,
 		contextDef,
 		byName["agent"],
@@ -465,6 +465,15 @@ func compactToolDefinitions() []compactToolDef {
 		byName["browser"],
 		byName["computer"],
 	}
+	for i := range defs {
+		meta := mcp.Meta{}
+		for key, value := range defs[i].Meta {
+			meta[key] = value
+		}
+		meta["securitySchemes"] = []map[string]any{{"type": "oauth2", "scopes": []string{"mcp:tools"}}}
+		defs[i].Meta = meta
+	}
+	return defs
 }
 
 func registerCompactTools(server *mcp.Server, service *Service, userID string) {

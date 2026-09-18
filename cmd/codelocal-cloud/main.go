@@ -44,6 +44,10 @@ func main() {
 	// Keep old per-thread ChatGPT MCP schemas functional after the compact tool
 	// migration without re-exposing the legacy granular tools in tools/list.
 	server.HTTP.Handler = mcpgateway.LegacyToolCallCompatibility(server.HTTP.Handler)
+	// ChatGPT binds Actions to the connected OAuth account using per-tool
+	// securitySchemes. Mirror them at the top level until the Go MCP SDK exposes
+	// that descriptor field natively.
+	server.HTTP.Handler = mcpgateway.ToolSecurityCompatibility(server.HTTP.Handler)
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.ListenAndServe() }()
 	select {
