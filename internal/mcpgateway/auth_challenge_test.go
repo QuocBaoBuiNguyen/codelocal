@@ -11,7 +11,9 @@ import (
 func TestMCPAuthChallengeHandlerReturnsOpenAIMetaChallenge(t *testing.T) {
 	handler := MCPAuthChallengeHandler("https://codelocal.cloud/.well-known/oauth-protected-resource")
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, discoveryRequest("tools/call"))
+	req := discoveryRequest("tools/call")
+	req.ContentLength = -1
+	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200; body=%s", rec.Code, rec.Body.String())

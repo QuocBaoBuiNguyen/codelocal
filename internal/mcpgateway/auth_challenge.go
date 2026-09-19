@@ -1,7 +1,6 @@
 package mcpgateway
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,16 +15,13 @@ type toolAuthChallengeRequest struct {
 }
 
 func unauthenticatedToolCallRequest(r *http.Request) bool {
-	if r == nil || r.URL.Path != "/mcp" || r.Method != http.MethodPost || r.Body == nil || r.ContentLength < 0 || r.ContentLength > legacyToolCompatibilityMaxBody {
+	if r == nil || r.URL.Path != "/mcp" || r.Method != http.MethodPost || r.Body == nil {
 		return false
 	}
-	raw, err := io.ReadAll(r.Body)
+	raw, err := readBoundedMCPRequestBody(r)
 	if err != nil {
 		return false
 	}
-	_ = r.Body.Close()
-	r.Body = io.NopCloser(bytes.NewReader(raw))
-	r.ContentLength = int64(len(raw))
 
 	var request toolAuthChallengeRequest
 	if json.Unmarshal(raw, &request) != nil {

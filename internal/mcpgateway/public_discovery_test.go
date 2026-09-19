@@ -15,6 +15,14 @@ func discoveryRequest(method string) *http.Request {
 	return httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"`+method+`","params":{}}`))
 }
 
+func TestPublicDiscoveryRequestHandlesUnknownContentLength(t *testing.T) {
+	req := discoveryRequest("tools/list")
+	req.ContentLength = -1
+	if !publicDiscoveryRequest(req) {
+		t.Fatal("tools/list with unknown Content-Length should remain discoverable")
+	}
+}
+
 func TestPublicDiscoveryRequestAllowsOnlyCatalogHandshake(t *testing.T) {
 	for _, method := range []string{"initialize", "server/discover", "notifications/initialized", "tools/list", "ping"} {
 		req := discoveryRequest(method)

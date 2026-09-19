@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -317,16 +318,19 @@ func rewriteLegacyToolCall(raw []byte) ([]byte, bool) {
 // that reconnecting the MCP will refresh the cached schema.
 func LegacyToolCallCompatibility(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/mcp" || r.Method != http.MethodPost || r.Body == nil || r.ContentLength < 0 || r.ContentLength > legacyToolCompatibilityMaxBody {
+		if r.URL.Path != "/mcp" || r.Method != http.MethodPost || r.Body == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
-		raw, err := io.ReadAll(r.Body)
+		raw, err := readBoundedMCPRequestBody(r)
 		if err != nil {
+			if errors.Is(err, errMCPRequestBodyTooLarge) {
+				http.Error(w, "MCP request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
-		_ = r.Body.Close()
 		body := raw
 		originalTool, requestID, isToolCall := singleToolCall(raw)
 		legacyTranslated := false
