@@ -11,6 +11,11 @@ import (
 
 var errMCPRequestBodyTooLarge = errors.New("MCP request body too large")
 
+type replayReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
 func readBoundedMCPRequestBody(r *http.Request) ([]byte, error) {
 	if r == nil || r.Body == nil {
 		return nil, io.ErrUnexpectedEOF
@@ -18,16 +23,24 @@ func readBoundedMCPRequestBody(r *http.Request) ([]byte, error) {
 	if r.ContentLength > legacyToolCompatibilityMaxBody {
 		return nil, errMCPRequestBodyTooLarge
 	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, legacyToolCompatibilityMaxBody+1))
+
+	originalBody := r.Body
+	originalLength := r.ContentLength
+	raw, err := io.ReadAll(io.LimitReader(originalBody, legacyToolCompatibilityMaxBody+1))
 	if err != nil {
+		r.Body = &replayReadCloser{Reader: io.MultiReader(bytes.NewReader(raw), originalBody), Closer: originalBody}
+		r.ContentLength = originalLength
 		return nil, err
 	}
-	_ = r.Body.Close()
 	if len(raw) > legacyToolCompatibilityMaxBody {
-		r.Body = io.NopCloser(bytes.NewReader(raw))
-		r.ContentLength = int64(len(raw))
+		// Preserve the unread remainder so observability/compatibility peeks never
+		// truncate a chunked request before the real handler sees it.
+		r.Body = &replayReadCloser{Reader: io.MultiReader(bytes.NewReader(raw), originalBody), Closer: originalBody}
+		r.ContentLength = originalLength
 		return nil, errMCPRequestBodyTooLarge
 	}
+
+	_ = originalBody.Close()
 	r.Body = io.NopCloser(bytes.NewReader(raw))
 	r.ContentLength = int64(len(raw))
 	return raw, nil
