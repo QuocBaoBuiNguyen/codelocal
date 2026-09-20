@@ -50,7 +50,7 @@ func (s *Server) runtimeConfigMutationAPI(w http.ResponseWriter, r *http.Request
 		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 		return
 	}
-	if !s.WebAuth.VerifyCSRF(r) {
+	if !s.WebAuth.VerifySessionCSRF(r, identity) {
 		webutil.JSON(w, http.StatusForbidden, map[string]any{"error": "invalid_csrf"})
 		return
 	}
@@ -87,7 +87,7 @@ func (s *Server) runtimeExecutionModeMutationAPI(w http.ResponseWriter, r *http.
 		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 		return
 	}
-	if !s.WebAuth.VerifyCSRF(r) {
+	if !s.WebAuth.VerifySessionCSRF(r, identity) {
 		webutil.JSON(w, http.StatusForbidden, map[string]any{"error": "invalid_csrf"})
 		return
 	}
@@ -137,7 +137,7 @@ func (s *Server) runtimeSecretMutationAPI(w http.ResponseWriter, r *http.Request
 		webutil.JSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 		return
 	}
-	if !s.WebAuth.VerifyCSRF(r) {
+	if !s.WebAuth.VerifySessionCSRF(r, identity) {
 		webutil.JSON(w, http.StatusForbidden, map[string]any{"error": "invalid_csrf"})
 		return
 	}
