@@ -13,12 +13,14 @@ import (
 )
 
 // PublicToolSurfaceVersion is the compatibility generation of the public MCP
-// contract. Generation 13 keeps the compact 14-tool catalog and makes discovery,
-// tool-security rewriting and auth challenges work for HTTP/2/chunked requests
-// where Content-Length is unknown. Authenticated execution remains OAuth-protected.
-// Bump the generation whenever the public contract or auth/discovery behavior changes.
+// contract. Generation 14 keeps the compact 14-tool catalog, forces AI hosts
+// to invalidate stale workspace schemas after the execution-mode choice was added,
+// and keeps discovery/tool-security rewriting/auth challenges working for HTTP/2
+// chunked requests where Content-Length is unknown. Authenticated execution remains
+// OAuth-protected. Bump the generation whenever the public contract or auth/discovery
+// behavior changes.
 const (
-	PublicToolSurfaceVersion = 13
+	PublicToolSurfaceVersion = 14
 
 	// Version 1.5.16 was the generation-2 MCP identity. Keep the same release
 	// line and derive the patch from the surface generation so every future
