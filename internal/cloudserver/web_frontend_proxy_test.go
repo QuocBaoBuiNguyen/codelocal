@@ -180,6 +180,51 @@ func TestWebFrontendProxyIsOptionalAndValidatesConfiguredOrigin(t *testing.T) {
 	}
 }
 
+func TestWebFrontendProxyTargetsUpstreamHostAndStripsRenderRoutingHeaders(t *testing.T) {
+	type observedRequest struct {
+		host               string
+		renderRouting      string
+		renderOriginServer string
+		renderRequestID    string
+	}
+	observed := make(chan observedRequest, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed <- observedRequest{
+			host:               r.Host,
+			renderRouting:      r.Header.Get("X-Render-Routing"),
+			renderOriginServer: r.Header.Get("X-Render-Origin-Server"),
+			renderRequestID:    r.Header.Get("Rndr-Id"),
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upstream.Close()
+
+	t.Setenv("CODELOCAL_WEB_ORIGIN", upstream.URL)
+	proxy, err := newWebFrontendProxyFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://codelocal-backend.onrender.com/login", nil)
+	request.Header.Set("X-Render-Routing", "loop")
+	request.Header.Set("X-Render-Origin-Server", "backend-instance")
+	request.Header.Set("Rndr-Id", "render-request")
+	response := httptest.NewRecorder()
+
+	proxy.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("unexpected proxy status: %d", response.Code)
+	}
+	got := <-observed
+	wantHost := upstream.Listener.Addr().String()
+	if got.host != wantHost {
+		t.Fatalf("presentation proxy used Host %q, want upstream Host %q", got.host, wantHost)
+	}
+	if got.renderRouting != "" || got.renderOriginServer != "" || got.renderRequestID != "" {
+		t.Fatalf("presentation proxy leaked Render routing headers: %#v", got)
+	}
+}
+
 func TestWebFrontendProxyStripsBrowserSecretsAndClientIPSignals(t *testing.T) {
 	type observedHeaders struct {
 		cookie, authorization, realIP, forwardedFor string
