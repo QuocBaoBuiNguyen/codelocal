@@ -37,7 +37,7 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
-func FromEnv() (*Client, error) {
+func resendFromEnv() (*Client, error) {
 	apiKey := strings.TrimSpace(os.Getenv("RESEND_API_KEY"))
 	from := strings.TrimSpace(os.Getenv("CODELOCAL_EMAIL_FROM"))
 	if apiKey == "" {
