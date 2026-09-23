@@ -196,13 +196,15 @@ func hybridMCPTransport(stateful, stateless http.Handler) http.Handler {
 
 func streamableMCPHandler(getServer func(*http.Request) *mcp.Server) http.Handler {
 	stateful := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
-		Stateless:           false,
-		JSONResponse:        true,
-		MaxRequestBodyBytes: 4 << 20,
+		Stateless:                  false,
+		JSONResponse:               true,
+		DisableLocalhostProtection: true,
+		MaxRequestBodyBytes:        4 << 20,
 	})
 	stateless := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
 		Stateless:                    true,
 		JSONResponse:                 true,
+		DisableLocalhostProtection:   true,
 		MaxRequestBodyBytes:          4 << 20,
 		PropagateRequestCancellation: true,
 	})
