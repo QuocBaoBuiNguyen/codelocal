@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -126,6 +127,23 @@ func (m *Manager) sendSignupCode(ctx context.Context, email, token, code string)
 	return client.Send(ctx, mailer.Message{To: email, Subject: subject, HTML: html, Text: text}, key)
 }
 
+func logSignupEmailFailure(err error) {
+	if err == nil {
+		return
+	}
+	provider := strings.ToLower(strings.TrimSpace(os.Getenv("CODELOCAL_EMAIL_PROVIDER")))
+	if provider == "" {
+		provider = "resend"
+	}
+	message := err.Error()
+	for _, name := range []string{"GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN", "RESEND_API_KEY"} {
+		if secret := strings.TrimSpace(os.Getenv(name)); secret != "" {
+			message = strings.ReplaceAll(message, secret, "[REDACTED]")
+		}
+	}
+	slog.Error("signup verification email delivery failed", "provider", provider, "error", message)
+}
+
 func (m *Manager) referralAllowed(ctx context.Context, email, referralCode string) (bool, error) {
 	referralCode = cloud.NormalizeReferralCode(referralCode)
 	if !cloud.ValidReferralCode(referralCode) {
@@ -205,6 +223,7 @@ func (m *Manager) signupStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := m.sendSignupCode(r.Context(), email, token, code); err != nil {
+		logSignupEmailFailure(err)
 		_ = m.Store.Redis.Del(r.Context(), signupPendingKey(token)).Err()
 		m.signupFailure(w, r, next, referralCode, "We could not send the verification email. Please try again.")
 		return
