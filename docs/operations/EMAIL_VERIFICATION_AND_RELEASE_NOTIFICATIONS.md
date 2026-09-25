@@ -1,9 +1,35 @@
 # CodeLocal email verification and release notifications
 
-CodeLocal uses Resend for two email flows:
+CodeLocal uses a provider-independent mailer for two email flows:
 
 1. Signup verification: a six-digit code is emailed before the user row/session is created.
-2. npm release notification: after the npm release workflow succeeds, a second GitHub Actions workflow calls the production Cloud endpoint, which batches an update email to registered users.
+2. npm release notification: after the npm release workflow succeeds, a second GitHub Actions workflow calls the production Cloud endpoint, which sends an update email to registered users.
+
+Set `CODELOCAL_EMAIL_PROVIDER` to `gmail` or `resend`. An empty value preserves the historical Resend default.
+
+## Gmail API setup (no sending domain required)
+
+The Gmail provider sends through the Gmail HTTPS API, so it works on hosting platforms that block outbound SMTP. The sender must be the Gmail account that grants OAuth access.
+
+1. Create a Google Cloud project and enable the Gmail API.
+2. Configure the OAuth consent screen and add the sending Gmail account as a test user while the app is in testing.
+3. Create an OAuth client.
+4. Authorize that Gmail account with the `https://www.googleapis.com/auth/gmail.send` scope and obtain a refresh token.
+5. Store the client ID, client secret, and refresh token as secrets in the production Render service.
+
+For an external OAuth consent screen left in `Testing`, Google expires refresh tokens after seven days when Gmail scopes are requested. Move the consent screen to `In production` before relying on it in Render, then authorize the account again to obtain the production refresh token.
+
+```text
+CODELOCAL_EMAIL_PROVIDER=gmail
+CODELOCAL_EMAIL_FROM=CodeLocal <your-address@gmail.com>
+GMAIL_CLIENT_ID=...
+GMAIL_CLIENT_SECRET=...
+GMAIL_REFRESH_TOKEN=...
+```
+
+Never commit these values. Gmail refreshes the short-lived access token automatically. `SendBatch` requires identical subject/content, validates the complete input, and sends the recipients in one blind-copy Gmail API request. Recipients cannot see one another, and the existing Redis release markers prevent completed release batches from being sent again.
+
+Personal Gmail accounts are limited to 500 total recipients per day. Release delivery beyond that size stops when Gmail returns its quota error; completed Redis batches remain marked, so a later retry can resume after the quota resets. Use a transactional provider or Google Workspace when the audience grows beyond the personal-account limit. See [Gmail sending limits](https://support.google.com/mail/answer/22839).
 
 ## Resend setup
 
@@ -27,6 +53,7 @@ CodeLocal <noreply@updates.codelocal.cloud>
 Set these only in the CodeLocal production service/environment. Never commit their values.
 
 ```text
+CODELOCAL_EMAIL_PROVIDER=resend
 RESEND_API_KEY=re_...
 CODELOCAL_EMAIL_FROM=CodeLocal <noreply@updates.codelocal.cloud>
 ```
@@ -41,7 +68,7 @@ The signup verification request lives in Redis for 10 minutes. Five incorrect co
 
 No repository secret is required for release notification. `.github/workflows/release-email.yml` grants `id-token: write`, requests a GitHub OIDC token with audience `codelocal-release-notify`, and sends that short-lived token to CodeLocal Cloud.
 
-CodeLocal Cloud verifies the GitHub OIDC signature plus issuer, audience, repository, workflow ref, event name, and token time window before accepting the notification. `RESEND_API_KEY` remains only in Railway production.
+CodeLocal Cloud verifies the GitHub OIDC signature plus issuer, audience, repository, workflow ref, event name, and token time window before accepting the notification. Email provider credentials remain only in the production deployment secret manager.
 
 ## Release flow
 
@@ -67,12 +94,12 @@ merge/push main
        -> immutable tag run has codelocal-vX.Y.Z: validate tag/package/runtime versions
   -> POST https://codelocal.cloud/internal/releases/notify
   -> CodeLocal reads registered emails from Postgres
-  -> Resend /emails/batch in groups of <= 100
+  -> selected mail provider sends groups of <= 100 recipients
 ```
 
 This avoids both failure modes: the first-stage `main` run no longer fails merely because its SHA is intentionally untagged, and the second-stage immutable tag run is no longer skipped because it is not a normal `main` branch run.
 
-Release email delivery is idempotent per version and batch. Redis stores completion markers, while each Resend batch also receives a deterministic idempotency key.
+Release email delivery is tracked per version and batch in Redis. Resend also receives a deterministic idempotency key; Gmail receives one deterministic MIME message ID for each blind-copy batch.
 
 Each release email includes the complete user update flow:
 

@@ -3,6 +3,7 @@ package mcpgateway
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -158,6 +159,66 @@ func TestPublicDiscoveryHandlerListsCompactToolsWithoutOAuthClaims(t *testing.T)
 	}
 	if got := schema.Properties["executionMode"].Enum; !reflect.DeepEqual(got, []string{"safe", "live"}) {
 		t.Fatalf("public executionMode choices=%v want [safe live]", got)
+	}
+}
+
+func TestPublicDiscoveryAllowsConfiguredHostBehindLoopbackProxy(t *testing.T) {
+	t.Setenv("PUBLIC_BASE_URL", "https://codelocal-backend.onrender.com")
+	s := &Service{
+		servers:      map[string]*mcp.Server{},
+		routes:       map[string]map[string]string{},
+		shownUpdates: map[string]map[string]struct{}{},
+	}
+	handler := PublicDiscoveryOrProtected(
+		s.PublicDiscoveryHandler(),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }),
+	)
+	req := discoveryRequest("tools/list")
+	req.Host = "codelocal-backend.onrender.com"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Protocol-Version", modernMCPProtocolVersion)
+	req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, &net.TCPAddr{
+		IP:   net.ParseIP("127.0.0.1"),
+		Port: 10000,
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public discovery behind trusted proxy status=%d body=%q, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPublicDiscoveryRejectsHostOutsideConfiguredPublicBaseURL(t *testing.T) {
+	t.Setenv("PUBLIC_BASE_URL", "https://codelocal-backend.onrender.com")
+	s := &Service{
+		servers:      map[string]*mcp.Server{},
+		routes:       map[string]map[string]string{},
+		shownUpdates: map[string]map[string]struct{}{},
+	}
+	handler := PublicDiscoveryOrProtected(
+		s.PublicDiscoveryHandler(),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }),
+	)
+	req := discoveryRequest("tools/list")
+	req.Host = "attacker.example"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Protocol-Version", modernMCPProtocolVersion)
+	req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, &net.TCPAddr{
+		IP:   net.ParseIP("127.0.0.1"),
+		Port: 10000,
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("public discovery with untrusted Host status=%d body=%q, want 403", rec.Code, rec.Body.String())
 	}
 }
 

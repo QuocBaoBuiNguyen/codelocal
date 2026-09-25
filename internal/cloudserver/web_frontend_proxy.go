@@ -27,6 +27,12 @@ func newWebFrontendProxyFromEnv() (http.Handler, error) {
 	baseDirector := proxy.Director
 	proxy.Director = func(request *http.Request) {
 		baseDirector(request)
+		// Public Render services route by Host. Preserve the upstream host so a
+		// backend-to-frontend proxy request cannot be routed back to this service.
+		request.Host = target.Host
+		request.Header.Del("X-Render-Routing")
+		request.Header.Del("X-Render-Origin-Server")
+		request.Header.Del("Rndr-Id")
 		// Forward only a supported display preference, never browser cookies.
 		if preference, err := request.Cookie("codelocal-language"); err == nil {
 			switch preference.Value {

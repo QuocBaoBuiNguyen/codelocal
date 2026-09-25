@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -169,6 +172,7 @@ func (s *Service) PublicDiscoveryHandler() http.Handler {
 	}, &mcp.StreamableHTTPOptions{
 		Stateless:                    true,
 		JSONResponse:                 true,
+		DisableLocalhostProtection:   true,
 		MaxRequestBodyBytes:          4 << 20,
 		PropagateRequestCancellation: true,
 	})
@@ -196,6 +200,10 @@ func (s *Service) PublicDiscoveryHandler() http.Handler {
 // all other non-discovery requests remain behind the strict OAuth middleware.
 func PublicDiscoveryOrProtected(public, authChallenge, protected http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if expected := configuredPublicHost(); expected != "" && (r == nil || !strings.EqualFold(r.Host, expected)) {
+			http.Error(w, "Forbidden: invalid Host header", http.StatusForbidden)
+			return
+		}
 		if r != nil && publicDiscoveryRequest(r) {
 			public.ServeHTTP(w, r)
 			return
@@ -206,4 +214,16 @@ func PublicDiscoveryOrProtected(public, authChallenge, protected http.Handler) h
 		}
 		protected.ServeHTTP(w, r)
 	})
+}
+
+func configuredPublicHost() string {
+	configured := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL"))
+	if configured == "" {
+		return ""
+	}
+	parsed, err := url.Parse(configured)
+	if err != nil {
+		return ""
+	}
+	return parsed.Host
 }

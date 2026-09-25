@@ -3,6 +3,7 @@ package mcpgateway
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -176,6 +177,47 @@ func TestStreamableHTTPListsRegisteredTools(t *testing.T) {
 	}
 	if len(result.Tools) != len(compactToolDefinitions()) {
 		t.Fatalf("tools/list returned %d tools, want %d", len(result.Tools), len(compactToolDefinitions()))
+	}
+}
+
+func TestStreamableHTTPAllowsConfiguredPublicHostBehindLoopbackProxy(t *testing.T) {
+	t.Setenv("PUBLIC_BASE_URL", "https://codelocal-backend.onrender.com")
+	for _, tc := range []struct {
+		name    string
+		body    string
+		version string
+	}{
+		{
+			name: "legacy stateful initialize",
+			body: `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"render-proxy-test","version":"1"}}}`,
+		},
+		{
+			name:    "modern stateless tools list",
+			body:    `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"render-proxy-test","version":"1"},"io.modelcontextprotocol/clientCapabilities":{}}}}`,
+			version: modernMCPProtocolVersion,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(tc.body))
+			req.Host = "codelocal-backend.onrender.com"
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			if tc.version != "" {
+				req.Header.Set("Mcp-Protocol-Version", tc.version)
+				req.Header.Set("Mcp-Method", "tools/list")
+			}
+			req = req.WithContext(context.WithValue(req.Context(), http.LocalAddrContextKey, &net.TCPAddr{
+				IP:   net.ParseIP("127.0.0.1"),
+				Port: 10000,
+			}))
+			rec := httptest.NewRecorder()
+
+			newTestStreamableMCPHandler().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("streamable MCP behind trusted proxy status=%d body=%q, want 200", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
